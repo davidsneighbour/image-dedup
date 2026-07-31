@@ -4,8 +4,11 @@ import pLimit from "p-limit";
 import type { Logger } from "../cli/output.js";
 import type { ImageOriginConfig } from "../config/schema.js";
 import { inspectImage } from "../inventory/inspect-image.js";
+import { generateCandidatePairs } from "../matching/candidate-index.js";
 import { computeExactDuplicateGroups } from "../matching/exact-duplicates.js";
+import { computeMissingHashes } from "../matching/hash-images.js";
 import { openDatabase } from "../persistence/database.js";
+import { replaceCandidatePairs } from "../persistence/repositories/candidate-pairs.js";
 import { recordScanError } from "../persistence/repositories/errors.js";
 import { replaceGroupsOfKind } from "../persistence/repositories/groups.js";
 import {
@@ -32,6 +35,9 @@ export interface RunAuditResult {
   errors: number;
   exactDuplicateGroups: number;
   wastedBytes: number;
+  hashesComputed: number;
+  hashesReused: number;
+  perceptualCandidatePairs: number;
 }
 
 /**
@@ -95,6 +101,9 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   let errorCount = 0;
   let exactDuplicateGroups = 0;
   let wastedBytes = 0;
+  let hashesComputed = 0;
+  let hashesReused = 0;
+  let perceptualCandidatePairs = 0;
 
   try {
     const limit = pLimit(config.concurrency.metadata);
@@ -144,11 +153,44 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     // Recomputed from every currently-inventoried record (not just this
     // run's newly-scanned ones), so a duplicate spanning an earlier and a
     // later scan is still detected. See PLAN.md §9.
-    const allRecords = listImageRecords(db);
-    const exactDuplicates = computeExactDuplicateGroups(allRecords, config.pathPreferences);
-    replaceGroupsOfKind(db, "exact-duplicate", exactDuplicates.groups);
-    exactDuplicateGroups = exactDuplicates.groups.length;
-    wastedBytes = exactDuplicates.wastedBytes;
+    if (config.matching.exactHash) {
+      const allRecords = listImageRecords(db);
+      const exactDuplicates = computeExactDuplicateGroups(allRecords, config.pathPreferences);
+      replaceGroupsOfKind(db, "exact-duplicate", exactDuplicates.groups);
+      exactDuplicateGroups = exactDuplicates.groups.length;
+      wastedBytes = exactDuplicates.wastedBytes;
+    }
+
+    if (config.matching.perceptualHash) {
+      // Perceptual hashing operates over every currently-inventoried
+      // record too, for the same resumability reason as exact-duplicate
+      // matching above. Records that already carry both hashes (from a
+      // previous run) are skipped entirely (PLAN.md §10.2).
+      const recordsForHashing = listImageRecords(db);
+      const hashResult = await computeMissingHashes(recordsForHashing, {
+        concurrency: config.concurrency.decoding,
+        onHashed: (record) => upsertImageRecord(db, record),
+        onError: (record, error) => {
+          errorCount++;
+          const report = {
+            phase: "matching",
+            filePath: record.path,
+            operation: "compute perceptual hash",
+            error: error instanceof Error ? error.message : String(error),
+            continued: true,
+          };
+          recordScanError(db, report);
+          logger.error(report);
+        },
+      });
+      hashesComputed = hashResult.computed;
+      hashesReused = hashResult.reused;
+
+      const hashedRecords = listImageRecords(db);
+      const candidatePairs = generateCandidatePairs(hashedRecords, config.matching);
+      replaceCandidatePairs(db, candidatePairs);
+      perceptualCandidatePairs = candidatePairs.length;
+    }
   } finally {
     db.close();
   }
@@ -159,10 +201,18 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   if (errorCount > 0) logger.info(`  Recorded ${errorCount} errors`);
 
   logger.info("Matching");
-  logger.info(`  Found ${exactDuplicateGroups} exact duplicate groups`);
-  if (wastedBytes > 0) {
+  if (config.matching.exactHash) {
+    logger.info(`  Found ${exactDuplicateGroups} exact duplicate groups`);
+    if (wastedBytes > 0) {
+      logger.info(
+        `  ${(wastedBytes / (1024 * 1024)).toFixed(2)} MB recoverable from exact duplicates`,
+      );
+    }
+  }
+  if (config.matching.perceptualHash) {
+    logger.info(`  Computed ${hashesComputed} perceptual hashes (${hashesReused} reused)`);
     logger.info(
-      `  ${(wastedBytes / (1024 * 1024)).toFixed(2)} MB recoverable from exact duplicates`,
+      `  Found ${perceptualCandidatePairs} perceptual candidate pairs (pending confirmation)`,
     );
   }
 
@@ -173,5 +223,8 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     errors: errorCount,
     exactDuplicateGroups,
     wastedBytes,
+    hashesComputed,
+    hashesReused,
+    perceptualCandidatePairs,
   };
 }

@@ -50,6 +50,20 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_groups_kind ON groups (kind);
     `,
   },
+  {
+    version: 3,
+    sql: `
+      CREATE TABLE candidate_pairs (
+        a                  TEXT NOT NULL,
+        b                  TEXT NOT NULL,
+        d_hash_distance    INTEGER NOT NULL,
+        p_hash_distance    INTEGER NOT NULL,
+        aspect_ratio_delta REAL NOT NULL,
+        updated_at         TEXT NOT NULL,
+        PRIMARY KEY (a, b)
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

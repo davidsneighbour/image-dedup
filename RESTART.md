@@ -43,13 +43,92 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1, continued through M4)
+## Current state (last updated: 2026-07-31, end of session 1, continued through M5)
 
-**M1 (project foundation), M2 (discovery + inventory), M3 (exact
-duplicates), and M4 (perceptual matching) are implemented, tested, and
-committed** (commits `e329acb`, `6375433`, `b3b50a8`, `e8a1b3f`). Next per
-PLAN.md's ordering: M5 (confirmation and relationship classification,
-issue #6) — re-read PLAN.md §11 and §15 before starting it.
+**M1-M5 are implemented, tested, and committed** (commits `e329acb`,
+`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`). Next per PLAN.md's ordering:
+M6 (crop and upscale detection, issue #7) — re-read PLAN.md §12 and §13
+before starting it.
+
+### M5 — what was added on top of M1-M4
+
+- `src/matching/similarity.ts` — `compareAtScale`/`compareMultiScale`
+  (SSIM via the new `ssim.js` dependency). Both images get resized to the
+  same NxN square (`fit: "fill"`) before comparison — deliberate
+  simplification, safe because pairs reaching this point already passed
+  M4's aspect-ratio tolerance. Multi-scale: 256px first, refined at up to
+  1024px (capped by real resolution) only if the 256px score is
+  "plausible" (`plausibleMargin`, default 0.5) — avoids wasted work on
+  clear non-matches.
+  - **`ssim.js` import gotcha**: it's a CJS package with `export default
+    ssim` in its `.d.ts`, but under this repo's `NodeNext` +
+    `verbatimModuleSyntax` config, `import ssim from "ssim.js"` resolves
+    to the whole module namespace (not the function) and fails with "not
+    callable". Fixed by `import * as ssimModule from "ssim.js"; const
+    ssim = ssimModule.ssim;` (the named export) instead. If a future
+    dependency has the same `export =` + `export default` CJS shape, same
+    fix applies. Same session also hit an analogous issue with `sharp`'s
+    `Sharp` type — `sharp.Sharp` (namespace access via the default import)
+    doesn't resolve under this config; use `import sharp, { type Sharp }
+    from "sharp"` instead.
+  - **`sharp(...).rotate()` with no argument auto-orients from EXIF**
+    before any further transform — used deliberately so a rotate180/flip
+    test isn't confused by a source file that's already EXIF-rotated.
+- `src/analysis/alpha-comparison.ts`, `src/analysis/colour-comparison.ts`
+  — cheap signals (sharp `.stats()`, no pixel-level comparison) feeding
+  the classifier.
+- `src/analysis/relationship-classifier.ts` — pure function, the actual
+  §15 rule table. Crop and watermark relationships are NOT produced here
+  (crop needs M6's subregion matching; watermark is optional/conservative
+  per the plan) — pairs that might be either just end up "unknown" if
+  SSIM doesn't confirm them, or get misclassified as e.g. "resize" if SSIM
+  happens to be high anyway (a genuine limitation until M6 adds a real
+  crop detector — a crop with high remaining-content overlap could still
+  pass SSIM and get called a plain "resize").
+- `src/matching/confirm-candidates.ts` — orchestrates SSIM + rotation/
+  mirror fallback + alpha + colour + classification per M4 candidate
+  pair. The rotation/mirror fallback (§11.3) only triggers for pairs
+  already in the candidate list whose plain-orientation SSIM didn't
+  confirm — not a blanket search.
+- **Real bug found and fixed via testing, not by inspection**: a
+  180°-rotated test fixture never showed up as confirmable at all. Root
+  cause: dHash/pHash are not rotation/mirror-invariant, so M4's candidate
+  generation (which only ever hashed the normal orientation) never
+  produced original↔rotated as a candidate pair in the first place —
+  confirmation only revisits *existing* candidates, so the rotation
+  fallback never got a chance to run. Fixed by adding
+  `src/matching/orientation-hashes.ts` (`computeOrientationVariants`,
+  computes dHash/pHash for rotate180/flipHorizontal/flipVertical per
+  distinct SHA-256, **not persisted** — recomputed each run when
+  `config.matching.detectRotation` is true) and extending
+  `generateCandidatePairs` (`src/matching/candidate-index.ts`) to also
+  search the BK-tree using each record's orientation-variant hashes, not
+  just its normal one. `src/matching/orientation-transform.ts` now holds
+  the shared `OrientationTransform` type + `applyTransform` helper, used
+  by both `similarity.ts` and `perceptual-hash.ts` (which gained an
+  optional `transform` parameter on `computeDifferenceHash`/
+  `computePerceptualHash`).
+- `src/matching/build-visual-groups.ts` — confirmed pairwise
+  relationships → `ImageGroup`s (kind `"visual"`, added to
+  `ImageGroupKind`). Conservative "representative-validated clique"
+  construction: within each connected component of confirmed edges, only
+  the lexicographically-first member (representative) and nodes with a
+  *direct* confirmed edge to it are accepted; everything else in the
+  component is left out and surfaced via a group warning, **not**
+  reprocessed as its own group in the same pass (a node excluded from one
+  group this run just doesn't appear in any group this run — see the
+  long comment in that file for why recovering it is riskier than it
+  sounds). Group `status` is capped at `"manual-review"`/`"ambiguous"`
+  and `recommendedOriginalId` is never set — M5 answers "are these related
+  and how", not "which one is the original" (that's M7).
+- New `comparisons` SQLite table (migration v4) — every classified pair,
+  confirmed or not, persisted for transparency. `groups.kind` now accepts
+  `"visual"` alongside M3's `"exact-duplicate"` (widened
+  `ImageGroupKind`/`imageGroupSchema`).
+- `runAudit()`'s "Matching" log section now also reports confirmed vs.
+  unconfirmed pair counts and probable-derivative-group count.
+
+### Previous state (M1 + M2 + M3 + M4), for reference — still accurate
 
 ### M4 — what was added on top of M1/M2/M3
 
@@ -244,22 +323,32 @@ issue #6) — re-read PLAN.md §11 and §15 before starting it.
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #6 (M5:
-   confirmation and relationship classification) is next per PLAN.md's
-   ordering.
+2. `gh issue list --label type:enhancement` and read open issues — #7 (M6:
+   crop and upscale detection) is next per PLAN.md's ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
    (and maybe `npm audit`) to confirm the baseline is still green before
    adding anything.
-4. Re-read PLAN.md §11 (visual confirmation: SSIM, alpha comparison,
-   rotation/mirroring) and §15 (relationship classification rules) before
-   starting M5. Note M5 needs an SSIM implementation (PLAN.md §3.1 lists
-   this as a dependency to add — none chosen yet) and turns M4's
-   unconfirmed `candidate_pairs` into classified `ImageGroup`s with an
-   `ImageRelationship` (resize/format-conversion/recompression/crop/etc.)
-   — this is also where per PLAN.md §16, pairwise relationships get
-   converted into actual groups (connected-components-ish, but cautious
-   about weak-chain over-merging: "A resembles B, B resembles C" must not
-   force "A resembles C").
+4. Re-read PLAN.md §12 (crop detection) and §13 (probable upscaling
+   detection) before starting M6. Notes:
+   - Crop detection needs subregion/feature matching (§12.1) — nothing
+     like that exists yet; the closest prior art in this codebase is the
+     DCT machinery in `perceptual-hash.ts`, which isn't directly reusable
+     for sliding-window correlation.
+   - §12.3's safety rule ("never automatically discard a crop") and
+     §13.3's ("penalize, don't reject outright") both fit the pattern
+     already established: M5 already refuses to auto-recommend an
+     original; M6 should add penalties/flags to existing groups, not
+     start recommending yet — that's still M7.
+   - There's a known, documented limitation from M5 worth fixing here: a
+     crop with high remaining-content overlap can currently pass SSIM
+     confirmation and get misclassified as a plain "resize" (see the
+     comment on `classifyRelationship` in `relationship-classifier.ts`).
+     M6's crop detector should run *before* or alongside relationship
+     classification and override that misclassification when a crop is
+     detected.
+   - `matching.detectCrops` config flag already exists (schema.ts) but is
+     currently unused anywhere — this is presumably the gate for M6's
+     detector.
 
 ### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 

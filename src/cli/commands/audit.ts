@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { loadConfig } from "../../config/load-config.js";
+import { writeResolvedConfig } from "../../config/resolved-config-file.js";
 import type { ImageOriginConfigInput } from "../../config/schema.js";
 import { type LogLevel, Logger, type OutputFormat } from "../output.js";
 
@@ -61,6 +62,10 @@ export function registerAuditCommand(program: Command): void {
       if (options.verbose || options.debug) {
         logger.verbose("Resolved configuration", { config });
       }
+
+      // Persisted so later commands (e.g. `report`) can reconstruct this
+      // same configuration from the workspace alone (PLAN.md §6).
+      await writeResolvedConfig(config);
 
       const { runAudit } = await import("../../discovery/run-audit.js");
       await runAudit({ config, logger, force: Boolean(options.force) });

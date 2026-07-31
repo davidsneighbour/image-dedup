@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/davidsneighbour/image-dedup/schemas/review-decision.schema.json",
+  "title": "image-origin review decisions export",
+  "description": "Shape of the JSON file produced by the M8 HTML report's \"export decisions\" action (PLAN.md §5.4, §20.4) and, later, consumed by `image-origin review import` (M9). Hand-maintained alongside src/domain/review-decision.ts's zod schema, which is the authoritative runtime validator.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["groupId", "action", "selectedAt"],
+    "properties": {
+      "groupId": { "type": "string", "minLength": 1 },
+      "selectedImageId": { "type": "string", "minLength": 1 },
+      "action": {
+        "enum": [
+          "approve-recommendation",
+          "select-different",
+          "keep-multiple",
+          "not-related",
+          "defer"
+        ]
+      },
+      "selectedAt": { "type": "string", "format": "date-time" },
+      "note": { "type": "string" }
+    }
+  }
+}

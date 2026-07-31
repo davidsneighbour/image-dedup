@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { registerAuditCommand } from "./commands/audit.js";
@@ -10,13 +9,7 @@ import { registerReviewCommand } from "./commands/review.js";
 import { registerVerifyCommand } from "./commands/verify.js";
 import { CliError, ExitCode } from "./exit-codes.js";
 import { Logger } from "./output.js";
-
-function readPackageVersion(): string {
-  const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-  const raw = readFileSync(packageJsonPath, "utf8");
-  const parsed = JSON.parse(raw) as { version: string };
-  return parsed.version;
-}
+import { readPackageVersion } from "./package-version.js";
 
 export function createProgram(): Command {
   const program = new Command();

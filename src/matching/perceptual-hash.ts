@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { type OrientationTransform, applyTransform } from "./orientation-transform.js";
 
 /** dHash: (DHASH_SIZE+1) x DHASH_SIZE greyscale grid, 64 bits from horizontal gradients. */
 const DHASH_SIZE = 8;
@@ -38,10 +39,13 @@ export function hammingDistanceHex(a: string, b: string): number {
  * Cheap, and robust to resizing/recompression; weaker against rotation and
  * mirroring than pHash. Returns a 64-bit hash as 16 hex characters.
  */
-export async function computeDifferenceHash(path: string): Promise<string> {
+export async function computeDifferenceHash(
+  path: string,
+  transform: OrientationTransform = "none",
+): Promise<string> {
   const width = DHASH_SIZE + 1;
   const height = DHASH_SIZE;
-  const { data } = await sharp(path)
+  const { data } = await applyTransform(sharp(path), transform)
     .greyscale()
     .resize(width, height, { fit: "fill" })
     .raw()
@@ -107,8 +111,11 @@ function dct2d(matrix: readonly (readonly number[])[]): number[][] {
  * recompression, and minor colour shifts than dHash. Returns a 64-bit hash
  * as 16 hex characters.
  */
-export async function computePerceptualHash(path: string): Promise<string> {
-  const { data } = await sharp(path)
+export async function computePerceptualHash(
+  path: string,
+  transform: OrientationTransform = "none",
+): Promise<string> {
+  const { data } = await applyTransform(sharp(path), transform)
     .greyscale()
     .resize(PHASH_SIZE, PHASH_SIZE, { fit: "fill" })
     .raw()

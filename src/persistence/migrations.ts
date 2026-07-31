@@ -64,6 +64,23 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 4,
+    sql: `
+      CREATE TABLE comparisons (
+        a             TEXT NOT NULL,
+        b             TEXT NOT NULL,
+        relationship  TEXT NOT NULL,
+        confidence    REAL NOT NULL,
+        ssim_score    REAL NOT NULL,
+        transform     TEXT NOT NULL,
+        reasons_json  TEXT NOT NULL,
+        warnings_json TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        PRIMARY KEY (a, b)
+      );
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

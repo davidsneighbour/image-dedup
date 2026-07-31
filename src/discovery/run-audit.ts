@@ -4,11 +4,15 @@ import pLimit from "p-limit";
 import type { Logger } from "../cli/output.js";
 import type { ImageOriginConfig } from "../config/schema.js";
 import { inspectImage } from "../inventory/inspect-image.js";
+import { buildVisualGroups } from "../matching/build-visual-groups.js";
 import { generateCandidatePairs } from "../matching/candidate-index.js";
+import { confirmCandidatePairs } from "../matching/confirm-candidates.js";
 import { computeExactDuplicateGroups } from "../matching/exact-duplicates.js";
 import { computeMissingHashes } from "../matching/hash-images.js";
+import { computeOrientationVariants } from "../matching/orientation-hashes.js";
 import { openDatabase } from "../persistence/database.js";
 import { replaceCandidatePairs } from "../persistence/repositories/candidate-pairs.js";
+import { replaceComparisons } from "../persistence/repositories/comparisons.js";
 import { recordScanError } from "../persistence/repositories/errors.js";
 import { replaceGroupsOfKind } from "../persistence/repositories/groups.js";
 import {
@@ -38,6 +42,9 @@ export interface RunAuditResult {
   hashesComputed: number;
   hashesReused: number;
   perceptualCandidatePairs: number;
+  confirmedRelationships: number;
+  unconfirmedPairs: number;
+  visualGroups: number;
 }
 
 /**
@@ -104,6 +111,9 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   let hashesComputed = 0;
   let hashesReused = 0;
   let perceptualCandidatePairs = 0;
+  let confirmedRelationships = 0;
+  let unconfirmedPairs = 0;
+  let visualGroups = 0;
 
   try {
     const limit = pLimit(config.concurrency.metadata);
@@ -187,9 +197,35 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
       hashesReused = hashResult.reused;
 
       const hashedRecords = listImageRecords(db);
-      const candidatePairs = generateCandidatePairs(hashedRecords, config.matching);
+      const orientationVariants = config.matching.detectRotation
+        ? await computeOrientationVariants(hashedRecords, config.concurrency.decoding)
+        : undefined;
+      const candidatePairs = generateCandidatePairs(hashedRecords, {
+        perceptualDistanceThreshold: config.matching.perceptualDistanceThreshold,
+        aspectRatioTolerance: config.matching.aspectRatioTolerance,
+        ...(orientationVariants ? { orientationVariants } : {}),
+      });
       replaceCandidatePairs(db, candidatePairs);
       perceptualCandidatePairs = candidatePairs.length;
+
+      // Confirmation (PLAN.md §11) and relationship classification (§15):
+      // every candidate pair gets checked against actual pixel content via
+      // SSIM, not just trusted on hash proximity alone.
+      const recordsById = new Map(hashedRecords.map((record) => [record.id, record]));
+      const confirmed = await confirmCandidatePairs(candidatePairs, recordsById, {
+        ssimThreshold: config.matching.ssimThreshold,
+        detectRotation: config.matching.detectRotation,
+        concurrency: config.concurrency.comparison,
+      });
+      replaceComparisons(db, confirmed);
+      confirmedRelationships = confirmed.filter(
+        (comparison) => comparison.relationship !== "unknown",
+      ).length;
+      unconfirmedPairs = confirmed.length - confirmedRelationships;
+
+      const visualGroupResult = buildVisualGroups(confirmed, config.review);
+      replaceGroupsOfKind(db, "visual", visualGroupResult);
+      visualGroups = visualGroupResult.length;
     }
   } finally {
     db.close();
@@ -211,9 +247,11 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   }
   if (config.matching.perceptualHash) {
     logger.info(`  Computed ${hashesComputed} perceptual hashes (${hashesReused} reused)`);
+    logger.info(`  Found ${perceptualCandidatePairs} perceptual candidate pairs`);
     logger.info(
-      `  Found ${perceptualCandidatePairs} perceptual candidate pairs (pending confirmation)`,
+      `  Confirmed ${confirmedRelationships} relationships, left ${unconfirmedPairs} unconfirmed`,
     );
+    logger.info(`  Found ${visualGroups} probable derivative groups`);
   }
 
   return {
@@ -226,5 +264,8 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     hashesComputed,
     hashesReused,
     perceptualCandidatePairs,
+    confirmedRelationships,
+    unconfirmedPairs,
+    visualGroups,
   };
 }

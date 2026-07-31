@@ -28,11 +28,11 @@ export type ImageGroupStatus =
 /**
  * `kind` is not in PLAN.md's §5.3 interface verbatim, but the JSON report
  * summary in §19 already distinguishes `exactDuplicateGroups` from
- * `visualGroups` — different detectors (exact hash now, perceptual
- * matching from M4 on) produce groups that must be told apart and
- * recomputed/replaced independently.
+ * `visualGroups` — different detectors (exact hash from M3, confirmed
+ * visual relationships from M5 on) produce groups that must be told apart
+ * and recomputed/replaced independently.
  */
-export type ImageGroupKind = "exact-duplicate";
+export type ImageGroupKind = "exact-duplicate" | "visual";
 
 export interface ImageGroup {
   id: string;
@@ -58,7 +58,7 @@ const imageComparisonSchema = z.object({
 export const imageGroupSchema = z
   .object({
     id: z.string().min(1),
-    kind: z.literal("exact-duplicate"),
+    kind: z.enum(["exact-duplicate", "visual"]),
     members: z.array(z.string().min(1)).min(2, "a group must have at least two members"),
     comparisons: z.array(imageComparisonSchema),
     recommendedOriginalId: z.string().min(1).optional(),

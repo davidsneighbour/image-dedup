@@ -244,9 +244,20 @@ async function refineAndVerifyCropWithSsim(
  * Conservative crop detector (PLAN.md §12). Tries both directions (each
  * image as the possible "full" image containing the other as a
  * subregion) since which one is the crop isn't known in advance, and
- * keeps whichever direction scores higher. Returns `undefined` unless a
- * candidate box clears `MIN_CONFIDENCE` — silence, not a low-confidence
- * guess, is the correct result for "these aren't a crop of each other."
+ * keeps whichever direction scores higher — but only among directions
+ * where the "full" candidate actually has at least as many pixels as the
+ * "crop" candidate. Without that constraint, two images that are merely
+ * very similar after downscaling (e.g. a plain resize whose SSIM
+ * confirmation happened to fail) can spuriously score better in the
+ * *backwards* direction — the smaller file "containing" the larger one as
+ * a 94%-retained crop of itself, which is nonsensical (a crop cannot have
+ * more native pixels than the frame it was cropped from). Caught via
+ * manual end-to-end testing, not by the unit tests, which happened to
+ * only ever exercise the direction that was already correct.
+ *
+ * Returns `undefined` unless a candidate box clears `MIN_CONFIDENCE` —
+ * silence, not a low-confidence guess, is the correct result for "these
+ * aren't a crop of each other."
  */
 export async function detectCrop(
   a: { id: string; realPath: string; width: number; height: number },
@@ -257,6 +268,9 @@ export async function detectCrop(
     decodeGreyscaleGrid(b.realPath),
   ]);
 
+  const pixelsA = a.width * a.height;
+  const pixelsB = b.width * b.height;
+
   const attempts = [
     {
       fullId: a.id,
@@ -264,10 +278,12 @@ export async function detectCrop(
       fullRealPath: a.realPath,
       fullWidth: a.width,
       fullHeight: a.height,
+      fullPixels: pixelsA,
       cropId: b.id,
       cropGrid: gridB,
       cropRealPath: b.realPath,
       cropAspectRatio: b.width / b.height,
+      cropPixels: pixelsB,
     },
     {
       fullId: b.id,
@@ -275,12 +291,14 @@ export async function detectCrop(
       fullRealPath: b.realPath,
       fullWidth: b.width,
       fullHeight: b.height,
+      fullPixels: pixelsB,
       cropId: a.id,
       cropGrid: gridA,
       cropRealPath: a.realPath,
       cropAspectRatio: a.width / a.height,
+      cropPixels: pixelsA,
     },
-  ];
+  ].filter((attempt) => attempt.fullPixels >= attempt.cropPixels);
 
   let best: CropDetectionResult | undefined;
   for (const attempt of attempts) {

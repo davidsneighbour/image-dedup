@@ -40,6 +40,8 @@ export interface ImageGroup {
   members: string[];
   comparisons: ImageComparison[];
   recommendedOriginalId?: string;
+  /** 0-100 quality score of `recommendedOriginalId` (PLAN.md §17.5's example JSON shows this alongside the recommendation). Only present when a recommendation was made. */
+  score?: number;
   confidence: number;
   status: ImageGroupStatus;
   reasons: string[];
@@ -62,6 +64,7 @@ export const imageGroupSchema = z
     members: z.array(z.string().min(1)).min(2, "a group must have at least two members"),
     comparisons: z.array(imageComparisonSchema),
     recommendedOriginalId: z.string().min(1).optional(),
+    score: z.number().min(0).max(100).optional(),
     confidence: z.number().min(0).max(1),
     status: z.enum(["automatic", "manual-review", "approved", "rejected", "ambiguous"]),
     reasons: z.array(z.string()),
@@ -74,6 +77,14 @@ export const imageGroupSchema = z
         code: z.ZodIssueCode.custom,
         message: "recommendedOriginalId must be one of the group's members",
         path: ["recommendedOriginalId"],
+      });
+    }
+    if (group.kind === "visual" && group.recommendedOriginalId && group.score === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'score must be present whenever recommendedOriginalId is set on a "visual" group (exact-duplicate groups have no quality score to report — content is byte-identical)',
+        path: ["score"],
       });
     }
   });

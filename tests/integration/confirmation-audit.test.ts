@@ -75,9 +75,16 @@ describe("runAudit confirmation and relationship classification", () => {
       );
       expect(groupContainingOriginal).toBeDefined();
       expect(groupContainingOriginal?.members).not.toContain(unrelatedId);
-      // M5 never recommends an original — that needs M7's scoring.
-      expect(groupContainingOriginal?.recommendedOriginalId).toBeUndefined();
-      expect(groupContainingOriginal?.status).not.toBe("automatic");
+      // This fixture's smooth low-frequency texture (chosen for hash/SSIM
+      // stability, see texturedBuffer's doc comment) has no genuine fine
+      // detail beyond what a 140px downscale can reconstruct, so M7's
+      // detail-based scoring can't reliably tell these near-identical
+      // full-size variants apart — that's exercised properly, with a
+      // texture built for it, in scoring-audit.test.ts. This test only
+      // asserts that scoring *ran* and picked a member of the actual
+      // family, not the unrelated image.
+      expect(groupContainingOriginal?.recommendedOriginalId).toBeDefined();
+      expect(groupContainingOriginal?.recommendedOriginalId).not.toBe(unrelatedId);
     } finally {
       db.close();
     }

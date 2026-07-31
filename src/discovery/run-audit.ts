@@ -21,6 +21,7 @@ import {
   listImageRecords,
   upsertImageRecord,
 } from "../persistence/repositories/image-records.js";
+import { recommendGroupOriginal } from "../scoring/recommend-group-originals.js";
 import { type DiscoveryEntry, discoverFiles } from "./discover-files.js";
 
 export interface RunAuditOptions {
@@ -48,6 +49,7 @@ export interface RunAuditResult {
   visualGroups: number;
   cropsDetected: number;
   probableUpscalesDetected: number;
+  automaticRecommendations: number;
 }
 
 /**
@@ -119,6 +121,7 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   let visualGroups = 0;
   let cropsDetected = 0;
   let probableUpscalesDetected = 0;
+  let automaticRecommendations = 0;
 
   try {
     const limit = pLimit(config.concurrency.metadata);
@@ -233,6 +236,12 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
       });
       for (const record of cropsAndUpscales.updatedRecords) {
         upsertImageRecord(db, record);
+        // Scoring below reads from `recordsById`, not the DB, so a record
+        // whose `quality.probableUpscale` was just set here must be
+        // reflected in the map too — otherwise scoring would silently see
+        // the pre-detection version and the upscale disqualifier could
+        // never fire.
+        recordsById.set(record.id, record);
       }
       cropsDetected = cropsAndUpscales.cropsDetected;
       probableUpscalesDetected = cropsAndUpscales.probableUpscalesDetected;
@@ -245,8 +254,26 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
       unconfirmedPairs = finalComparisons.length - confirmedRelationships;
 
       const visualGroupResult = buildVisualGroups(finalComparisons, config.review);
-      replaceGroupsOfKind(db, "visual", visualGroupResult);
-      visualGroups = visualGroupResult.length;
+
+      // Scoring and recommendations (PLAN.md §17, §18): only now, after
+      // every prior signal (relationships, crops, probable upscales) has
+      // been recorded, does the tool attempt to say which member of a
+      // group is the best archival source.
+      const recommendedGroups = await Promise.all(
+        visualGroupResult.map((group) =>
+          recommendGroupOriginal(group, recordsById, {
+            scoring: config.scoring,
+            review: config.review,
+            pathPreferences: config.pathPreferences,
+          }),
+        ),
+      );
+
+      replaceGroupsOfKind(db, "visual", recommendedGroups);
+      visualGroups = recommendedGroups.length;
+      automaticRecommendations = recommendedGroups.filter(
+        (group) => group.status === "automatic",
+      ).length;
     }
   } finally {
     db.close();
@@ -279,6 +306,7 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     if (config.quality.detectUpscaling && probableUpscalesDetected > 0) {
       logger.info(`  Flagged ${probableUpscalesDetected} probable upscales`);
     }
+    logger.info(`  ${automaticRecommendations} groups have an automatic recommendation`);
   }
 
   return {
@@ -296,5 +324,6 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     visualGroups,
     cropsDetected,
     probableUpscalesDetected,
+    automaticRecommendations,
   };
 }

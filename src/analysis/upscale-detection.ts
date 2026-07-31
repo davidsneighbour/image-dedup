@@ -22,7 +22,11 @@ const LAPLACIAN_KERNEL = [0, 1, 0, 1, -4, 1, 0, 1, 0];
  * result. Higher means more genuine high-frequency detail; a smooth or
  * over-smoothed (e.g. naively upscaled) image scores lower.
  */
-async function detailScoreAt(path: string, width: number, height: number): Promise<number> {
+export async function computeDetailScore(
+  path: string,
+  width: number,
+  height: number,
+): Promise<number> {
   const stats = await sharp(path)
     .greyscale()
     .resize(width, height, { fit: "fill" })
@@ -58,12 +62,12 @@ export async function detectProbableUpscale(
 
   const [downscaledSimilarity, largerDetailScore, smallerUpscaledDetailScore] = await Promise.all([
     compareAtScale(larger.realPath, smaller.realPath, Math.min(smaller.width, smaller.height, 256)),
-    detailScoreAt(larger.realPath, analysisWidth, analysisHeight),
+    computeDetailScore(larger.realPath, analysisWidth, analysisHeight),
     // "Upscale using a known high-quality method": sharp's default resize
     // kernel (Lanczos3) is exactly that; resizing smaller *up* to the
     // larger's analysis dimensions and measuring detail there is step 3-4
     // of §13.2.
-    detailScoreAt(smaller.realPath, analysisWidth, analysisHeight),
+    computeDetailScore(smaller.realPath, analysisWidth, analysisHeight),
   ]);
 
   const detailRatio =

@@ -131,4 +131,53 @@ describe("detectCrop", () => {
       expect(result.retainedArea).toBeLessThan(0.98);
     }
   });
+
+  it("never reports the smaller image as the 'larger' (full-frame) side of a crop", async () => {
+    // Regression test: a plain resize relationship (same content, no real
+    // crop) between two per-pixel-noisy images was found — via manual
+    // end-to-end testing — to sometimes score *better* in the backwards
+    // direction (the smaller file "containing" the larger one as a
+    // 94%-retained crop of itself), which is nonsensical. See the
+    // `detectCrop` doc comment for the full story.
+    function pseudoRandom(x: number, y: number, seed: number): number {
+      const n = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453;
+      return n - Math.floor(n);
+    }
+    function detailedTexturedBuffer(size: number, seed: number): Buffer {
+      const channels = 3;
+      const buffer = Buffer.alloc(size * size * channels);
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const fx = x / size;
+          const fy = y / size;
+          const base =
+            128 + 40 * Math.sin(fx * 6 * Math.PI + seed) + 20 * Math.cos(fy * 9 * Math.PI + seed);
+          const noise = (pseudoRandom(x, y, seed) - 0.5) * 90;
+          const clamped = Math.max(0, Math.min(255, Math.round(base + noise)));
+          const idx = (y * size + x) * channels;
+          buffer[idx] = clamped;
+          buffer[idx + 1] = clamped;
+          buffer[idx + 2] = clamped;
+        }
+      }
+      return buffer;
+    }
+
+    const originalPath = join(dir, "original.jpg");
+    const thumbPath = join(dir, "thumb.jpg");
+    await sharp(detailedTexturedBuffer(500, 5), { raw: { width: 500, height: 500, channels: 3 } })
+      .jpeg({ quality: 95 })
+      .toFile(originalPath);
+    await sharp(originalPath).resize(160, 160).jpeg({ quality: 85 }).toFile(thumbPath);
+
+    const result = await detectCrop(
+      { id: "original", realPath: originalPath, width: 500, height: 500 },
+      { id: "thumb", realPath: thumbPath, width: 160, height: 160 },
+    );
+
+    if (result) {
+      expect(result.largerImageId).toBe("original");
+      expect(result.croppedImageId).toBe("thumb");
+    }
+  });
 });

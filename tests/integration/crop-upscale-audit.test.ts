@@ -5,6 +5,7 @@ import { resolveDefaultConfig } from "../../src/config/defaults.js";
 import { runAudit } from "../../src/discovery/run-audit.js";
 import { openDatabase } from "../../src/persistence/database.js";
 import { listComparisons } from "../../src/persistence/repositories/comparisons.js";
+import { listGroupsOfKind } from "../../src/persistence/repositories/groups.js";
 import { listImageRecords } from "../../src/persistence/repositories/image-records.js";
 import {
   type CropUpscaleFixtureTree,
@@ -93,6 +94,19 @@ describe("runAudit crop and upscale detection", () => {
 
       // No automatic deletion or rejection: every fixture file is still present.
       expect(records).toHaveLength(6);
+
+      // Regression: scoring must see the *just-detected* probableUpscale
+      // flag, not a stale pre-detection snapshot of the record — otherwise
+      // the disqualifier in scoreCandidate never fires and the flagged
+      // upscale can still win the recommendation.
+      const fakeSmallRecord = records.find((r) => r.path.endsWith("fake-small.png"));
+      const groups = listGroupsOfKind(db, "visual");
+      const fakeGroup = groups.find((group) =>
+        group.members.includes(fakeUpscaledRecord?.id ?? ""),
+      );
+      expect(fakeGroup).toBeDefined();
+      expect(fakeGroup?.recommendedOriginalId).not.toBe(fakeUpscaledRecord?.id);
+      expect(fakeGroup?.recommendedOriginalId).toBe(fakeSmallRecord?.id);
     } finally {
       db.close();
     }

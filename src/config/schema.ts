@@ -34,6 +34,60 @@ const qualitySchema = z
   })
   .default({});
 
+/**
+ * Source-quality scoring weights (PLAN.md §17.2: "Use a 0 to 100 score
+ * with documented weights... The precise weights should be configurable").
+ * Two of the plan's suggested components — compression quality and
+ * colour fidelity — aren't separately implemented (no JPEG-quality or
+ * absolute colour-fidelity estimator exists yet; that's PLAN.md §14's
+ * "Phase 8: compression and detail analysis", which isn't assigned to any
+ * milestone in §34's list). Their combined 23-point budget is
+ * redistributed across the components that *are* measured, weighted
+ * toward native detail (which already indirectly reflects heavy
+ * recompression — a badly recompressed image measurably loses
+ * high-frequency detail) and completeness (crop safety matters more than
+ * a nice-to-have colour-fidelity nuance). See
+ * `src/scoring/score-candidate.ts` for what each component actually
+ * measures.
+ */
+const scoringWeightsSchema = z
+  .object({
+    nativeDetail: z.number().min(0).default(30),
+    effectiveResolution: z.number().min(0).default(20),
+    completeness: z.number().min(0).default(20),
+    bitDepth: z.number().min(0).default(5),
+    alphaPreservation: z.number().min(0).default(8),
+    iccProfile: z.number().min(0).default(5),
+    usefulMetadata: z.number().min(0).default(7),
+    preferredSourcePath: z.number().min(0).default(5),
+  })
+  .default({})
+  .superRefine((weights, ctx) => {
+    const total = Object.values(weights).reduce((sum, value) => sum + value, 0);
+    if (Math.abs(total - 100) > 0.001) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `scoring.weights components must sum to 100 (currently ${total})`,
+      });
+    }
+  });
+
+const scoringPenaltiesSchema = z
+  .object({
+    probableUpscale: z.number().min(0).default(25),
+    confirmedCrop: z.number().min(0).default(20),
+    missingAlphaAvailableElsewhere: z.number().min(0).default(12),
+    metadataStrippedRelativeToGroup: z.number().min(0).default(2),
+  })
+  .default({});
+
+const scoringSchema = z
+  .object({
+    weights: scoringWeightsSchema,
+    penalties: scoringPenaltiesSchema,
+  })
+  .default({});
+
 const reviewSchema = z
   .object({
     automaticConfidenceThreshold: z.number().min(0).max(1).default(0.97),
@@ -161,6 +215,7 @@ export const configSchema = z
     discovery: discoverySchema,
     matching: matchingSchema,
     quality: qualitySchema,
+    scoring: scoringSchema,
     review: reviewSchema,
     consolidation: consolidationSchema,
     references: referencesSchema,

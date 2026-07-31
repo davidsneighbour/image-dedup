@@ -50,3 +50,26 @@ export function listGroupsOfKind(db: ImageOriginDatabase, kind: ImageGroupKind):
     .all({ kind });
   return rows.map(rowToGroup);
 }
+
+/** Every persisted group regardless of kind — e.g. for review import, which validates decisions against groups without caring which detector produced them. */
+export function listAllGroups(db: ImageOriginDatabase): ImageGroup[] {
+  const rows = db.prepare<[], GroupRow>("SELECT * FROM groups ORDER BY id ASC").all();
+  return rows.map(rowToGroup);
+}
+
+/**
+ * Patches a single already-persisted group in place (by `id`, the table's
+ * primary key), unlike `replaceGroupsOfKind`'s wholesale recompute — used
+ * by review import, which only ever touches the specific groups a human
+ * reviewer made a decision about.
+ */
+export function updateGroup(db: ImageOriginDatabase, group: ImageGroup): void {
+  db.prepare(
+    "UPDATE groups SET kind = @kind, group_json = @groupJson, updated_at = @updatedAt WHERE id = @id",
+  ).run({
+    id: group.id,
+    kind: group.kind,
+    groupJson: JSON.stringify(group),
+    updatedAt: new Date().toISOString(),
+  });
+}

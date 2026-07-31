@@ -79,11 +79,16 @@ export const imageGroupSchema = z
         path: ["recommendedOriginalId"],
       });
     }
-    if (group.kind === "visual" && group.recommendedOriginalId && group.score === undefined) {
+    if (
+      group.status === "automatic" &&
+      group.kind === "visual" &&
+      group.recommendedOriginalId &&
+      group.score === undefined
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          'score must be present whenever recommendedOriginalId is set on a "visual" group (exact-duplicate groups have no quality score to report — content is byte-identical)',
+          'score must be present on an "automatic" visual-group recommendation (exact-duplicate groups have no quality score to report — content is byte-identical). Not required once a human reviewer has approved/overridden the recommendation (status other than "automatic") — the score described the machine\'s own candidate, which may no longer be the selected one.',
         path: ["score"],
       });
     }

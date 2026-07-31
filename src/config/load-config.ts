@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
-import type { z } from "zod";
 import { CliError, ExitCode } from "../cli/exit-codes.js";
+import { formatZodError } from "../cli/format-zod-error.js";
 import { type ImageOriginConfig, type ImageOriginConfigInput, configSchema } from "./schema.js";
 
 export interface LoadConfigOptions {
@@ -8,15 +8,6 @@ export interface LoadConfigOptions {
   configPath?: string;
   /** CLI-provided overrides, shallow-merged over the file config before validation. */
   overrides?: Partial<ImageOriginConfigInput>;
-}
-
-function formatZodError(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => {
-      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
-      return `  - ${path}: ${issue.message}`;
-    })
-    .join("\n");
 }
 
 async function readConfigFile(configPath: string): Promise<unknown> {

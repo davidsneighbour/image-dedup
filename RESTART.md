@@ -43,12 +43,118 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-08-01, continued through M8)
+## Current state (last updated: 2026-08-01, continued through M9)
 
-**M1-M8 are implemented, tested, and committed** (commits `e329acb`,
+**M1-M9 are implemented, tested, and committed** (commits `e329acb`,
 `6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`, `79b0751`,
-`e55901c`). Next per PLAN.md's ordering: M9 (review import, issue #10) —
-re-read PLAN.md §21 before starting it.
+`e55901c`, `0073bdd`). Next per PLAN.md's ordering: M10 (consolidation,
+issue #11) — re-read PLAN.md §22-24 before starting it.
+
+### M9 — what was added on top of M1-M8
+
+- `src/review/import-decisions.ts` — `importReviewDecisions()`, the
+  orchestration entry point for `image-origin review import`
+  (PLAN.md §21). Reads and zod-validates the `--decisions` file, reads
+  and zod-validates `<workspace>/audit.json` (the report snapshot the
+  reviewer actually saw — written by `report`, M8), opens the workspace
+  DB, and runs validation before touching anything. Applying happens in
+  a single `db.transaction()`, matching this workspace's "use
+  transactions for state-changing operations" contract (PLAN.md §6).
+- `src/review/validate-decisions.ts` — `validateDecisions()`, pure, no
+  I/O. Splits a decision batch into `valid` / `invalid` / `stale`:
+  - `invalid` (always blocks the whole import, nothing applied):
+    duplicate decisions for the same `groupId` in one file, a `groupId`
+    absent from the snapshot, a `selectedImageId` that isn't a member of
+    that group, or an `approve-recommendation` that doesn't select the
+    group's actual `recommendedOriginalId`.
+  - `stale`: the decision is structurally fine against the snapshot, but
+    the *live* group (current DB state) has different membership than
+    the snapshot did — i.e. `audit` was re-run after `report` wrote
+    `audit.json` but before this import. Blocks the import unless
+    `--force-stale-decisions`.
+  - The same function does double duty for the forced-stale re-check:
+    calling it with the live-groups map passed as *both* the
+    "reference" and "live" argument makes staleness trivially
+    unsatisfiable (a map matches itself), so it validates a decision
+    directly against current truth. `import-decisions.ts` uses exactly
+    this to re-check only the stale subset after `--force-stale-decisions`
+    — a decision that's still nonsensical against the group as it exists
+    *now* (e.g. its selected image was itself removed) is skipped, not
+    blindly forced through.
+- `src/review/apply-decision.ts` — `applyDecisionToGroup()`, pure.
+  `approve-recommendation` → `status: "approved"`, keeps
+  `recommendedOriginalId`/`score` as-is. `select-different` → `status:
+  "approved"`, `recommendedOriginalId` becomes the human's pick, `score`
+  cleared (it described the machine's candidate, not this one).
+  `keep-multiple` → `"approved"`, both cleared (no single winner).
+  `not-related` → `"rejected"`, both cleared. `defer` → no change beyond
+  appending a reason. A `"Reviewed by human: <action> — <note>"` entry is
+  always appended to `reasons` (never replaces the automatic-scoring
+  reasons already there, so the audit trail stays intact).
+- **Relaxed `imageGroupSchema`'s score-required constraint**
+  (`src/domain/image-group.ts`): previously *any* `"visual"` group with
+  `recommendedOriginalId` set required `score`. Now only required while
+  `status === "automatic"` — once a human has approved/overridden a
+  recommendation, the score described the machine's own (possibly now
+  superseded) candidate and is correctly clearable. No test relied on
+  the old, stricter behaviour.
+- `src/review/decisions-file.ts` — `readDecisionsFile`/`writeDecisionsFile`/
+  `mergeDecisions`, the `<workspace>/decisions.json` persisted record of
+  applied decisions (PLAN.md §6) — distinct from the `--decisions` file a
+  reviewer passes in, which lives wherever they downloaded it from the
+  HTML report. `mergeDecisions` is keyed by `groupId`: re-importing after
+  a reviewer changes their mind overwrites that group's stored decision
+  in place rather than appending a duplicate. Same "absent/invalid file
+  treated as empty, not a hard error" precedent as
+  `config/resolved-config-file.ts`.
+- `src/persistence/repositories/groups.ts` gained `listAllGroups()`
+  (both kinds, for building the live-groups map) and `updateGroup()`
+  (patches one row by `id` — unlike `replaceGroupsOfKind`'s wholesale
+  recompute, review import only ever touches the specific groups a human
+  made a decision about).
+- `src/cli/format-zod-error.ts` — extracted from `config/load-config.ts`
+  (was a private function there) since review import needed the same
+  zod-error formatting for decisions/report-schema failures. No
+  behaviour change to `load-config.ts`.
+- **`ReviewDecision`'s optional fields (`src/domain/review-decision.ts`)
+  gained explicit `| undefined`** (`selectedImageId?: string |
+  undefined`, not just `selectedImageId?: string`) — under
+  `exactOptionalPropertyTypes`, zod's `.optional()` output type always
+  includes an explicit `| undefined`, so a hand-written interface without
+  it isn't assignable from `reviewDecisionsSchema.parse()`'s result. This
+  is the first place in the codebase that consumes a parsed-schema result
+  as its paired hand-written domain type rather than just validating an
+  already-typed value — **if a future milestone does the same with
+  `ImageGroup`/`imageGroupSchema` or `JsonReport`/`jsonReportSchema`,
+  expect the identical class of type error** (import-decisions.ts works
+  around it for `ImageGroup` with a narrow, commented `as ImageGroup[]`
+  cast on `audit.json`'s already-schema-validated `groups`, rather than
+  loosening `ImageGroup`/`ImageComparison` themselves — `relationship` in
+  particular is `z.string()` in the schema but `ImageRelationship` (a
+  real union) in the domain type, a pre-existing looseness not worth
+  tightening just for this).
+- **Real bug found via manual CLI testing against the built `dist/`, not
+  caught by any test**: `image-origin review import --workspace X
+  --decisions Y` always failed with `error: required option '--workspace
+  <path>' not specified` even though `--workspace` was clearly passed.
+  Root cause: the parent `review` command (in `src/cli/commands/review.ts`)
+  declared its own `--workspace` option (leftover from the old stub);
+  Commander.js resolves a parent-level option against the *entire*
+  remaining argument list, including tokens meant for a subcommand's own
+  `requiredOption` of the same name — the parent silently "claims" the
+  value and the child's `requiredOption` check then reports it as never
+  supplied. Fixed by removing the redundant parent-level option (the
+  parent command's action never used it anyway). **If you ever add
+  another `program.command(x).option(...)` parent with a
+  `x.command(y).requiredOption(...)` child sharing an option name, this
+  will silently reoccur** — verified by writing a 15-line reproduction
+  against bare `commander` directly (not this codebase) before landing
+  the fix, and by then actually running the built CLI end-to-end (audit →
+  report → review import, including the invalid-group-id and
+  stale-without-force rejection paths) — this is exactly the class of bug
+  `--help` output or unit tests alone would never surface, since nothing
+  before this milestone had a subcommand nested under a command with its
+  own options.
 
 ### M8 — what was added on top of M1-M7
 
@@ -635,34 +741,37 @@ neither caught by unit tests** (both now have regression tests):
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #9 (M8:
-   reports, JSON + HTML) is next per PLAN.md's ordering.
+2. `gh issue list --label type:enhancement` and read open issues — #11
+   (M10: consolidation) is next per PLAN.md's ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
    (and maybe `npm audit`) to confirm the baseline is still green before
    adding anything.
-4. Re-read PLAN.md §19 (report generation) before starting M8. Notes:
-   - Every signal M8's reports need already exists and is persisted:
-     `ImageRecord` (inventory), `comparisons` (relationships, including
-     crop/upscale warnings), and `groups` (now carrying `score`,
-     `confidence`, `status`, `reasons`, `warnings`,
-     `recommendedOriginalId` as of M7). This milestone is about
-     *presenting* existing data, not computing anything new — resist the
-     temptation to add new detection/scoring logic here.
-   - PLAN.md's report almost certainly needs to distinguish
-     `"automatic"` / `"manual-review"` / `"ambiguous"` groups clearly
-     (the reviewer's whole job in M9 depends on being able to find the
-     groups that need their attention) — check §19's exact field/section
-     requirements before designing the JSON shape, then design the HTML
-     as a view over that same JSON rather than a separate data path.
-   - No network calls for HTML report rendering (inline CSS/JS only, no
-     CDN dependencies) — same constraint as everywhere else in this repo
-     (PLAN.md §35, and see this repo's own Artifact-equivalent rule of
-     thumb: self-contained, no external requests).
-   - Re-read the M7 section above's note on `recordsById` staleness before
-     touching `run-audit.ts` again — if M8 needs any additional
-     per-record data computed mid-pipeline, make sure whatever map feeds
-     the report generator is built (or refreshed) *after* that data
-     exists, not before.
+4. Re-read PLAN.md §22-24 (path planning, consolidation, manifest) before
+   starting M10. Notes:
+   - This is the first milestone that actually **mutates the filesystem**
+     outside the workspace — everything through M9 only ever read source
+     images and wrote into `<workspace>/`. `--apply` (mutations) vs.
+     `--yes` (skip confirmation) are explicitly *not* the same flag
+     (PLAN.md §23.2) — don't conflate them, and default to a dry-run plan
+     with no writes when `--apply` is absent, matching `consolidate.ts`'s
+     existing stub option set.
+   - Only `"approved"` groups (or ungrouped/singleton originals?  re-read
+     §23 for exactly which images qualify) should ever be considered for
+     consolidation — M9's `review import` is what gets a group *to*
+     `"approved"`/`"rejected"`; a group still `"manual-review"` or
+     `"ambiguous"` has no human-confirmed original and must not be
+     silently consolidated.
+   - §23.3's operation journal + §23.4's rollback need real hash
+     verification (copy, hash the destination, compare) before a copy is
+     considered "verified" — don't trust a copy succeeded just because no
+     exception was thrown.
+   - §22.3's date-selection precedence (trusted capture date → embedded
+     metadata date → configured source date → filesystem mtime only as a
+     weak fallback → `unknown-date`) matters for the `date-and-slug`
+     naming strategy — filesystem mtime is explicitly called out as
+     untrustworthy for this, don't default to it.
+   - §22.4's collision policy defaults to `"fail"` — don't silently
+     overwrite or auto-rename unless a non-default policy is configured.
 
 ### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 

@@ -43,12 +43,121 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1, continued through M7)
+## Current state (last updated: 2026-08-01, continued through M8)
 
-**M1-M7 are implemented, tested, and committed** (commits `e329acb`,
-`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`, `79b0751`). Next per
-PLAN.md's ordering: M8 (reports, JSON + HTML, issue #9) — re-read PLAN.md
-§19 before starting it.
+**M1-M8 are implemented, tested, and committed** (commits `e329acb`,
+`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`, `79b0751`,
+`e55901c`). Next per PLAN.md's ordering: M9 (review import, issue #10) —
+re-read PLAN.md §21 before starting it.
+
+### M8 — what was added on top of M1-M7
+
+M8 is the first milestone where a *second* command (`report`) reads back
+state that `audit` produced in a prior, separate invocation — everything
+below either serves that JSON/HTML report deliverable directly, or is a
+plumbing gap that only became visible once something actually needed to
+reconstruct config from a bare workspace.
+
+- `src/reporting/json-report.ts` — the PLAN.md §19 JSON report. `JsonReport`
+  + `jsonReportSchema` (zod) are hand-kept in sync with
+  `schemas/report.schema.json` (a real JSON Schema file, for external
+  consumers — not runtime-enforced; `assertValidJsonReport` via the zod
+  schema is what actually gates a write). `buildJsonReport()` is a pure
+  function: sorts images by path then id and groups by id so output is
+  deterministic regardless of caller array order, computes a config
+  fingerprint (sha256 of the resolved config) and the summary counts.
+  **Known, deliberate limitation**: `summary.filesDiscovered` and
+  `filesInspected` are both just the persisted image-record count —
+  discovery-time skip counts (unsupported/inaccessible/duplicate-path/
+  symlink-skipped) are transient to a single `audit` run's in-memory
+  `RunAuditResult` and were never persisted to the workspace database, so
+  a standalone `report` run (which may happen long after `audit`) has no
+  way to recover them. Fixing this properly would mean adding a persisted
+  "last run summary" to the DB — out of scope for this milestone, flagged
+  here for whoever eventually wants exact discovery-vs-inspection counts
+  in the report.
+- `src/reporting/thumbnails.ts` / `detail-crops.ts` — sharp-based asset
+  generation, cached by content hash under `<workspace>/cache/` (so
+  re-running `report` regenerates nothing) and copied into
+  `<workspace>/report/assets/` so the report directory is portable on its
+  own. Detail crops (PLAN.md §20.3: centre + highest-detail region) use a
+  small flat grid search scored by Laplacian-stdev (same idea as M6's
+  upscale detector, but a deliberately independent implementation — that
+  one scores a whole image for upscale detection, this one ranks
+  candidate *regions* within one image, a different comparison). Only
+  generated for images that are actually members of a group
+  (`src/reporting/report-assets.ts`) — ungrouped images have nothing to
+  compare against in review, so there's no point spending decode time.
+  **Deliberately skips EXIF auto-rotation** for crop-box math (unlike
+  `thumbnails.ts`, which does auto-rotate since it's pure display) — boxes
+  are computed and extracted against the same raw/stored pixel grid as
+  `record.image.width`/`height` everywhere else in this codebase, avoiding
+  an orientation-swap bug where a box computed pre-rotation gets extracted
+  post-rotation.
+- `src/reporting/html/` — the static HTML report (PLAN.md §20). No build
+  step: `styles.ts`/`client-script.ts` are plain CSS/JS as TS template
+  string constants, embedded verbatim by `render-report.ts`. Two security
+  properties worth knowing if you touch this:
+  1. The report's own JSON data is embedded **inline** (a
+     `<script type="application/json" id="report-data">` the client reads
+     via `JSON.parse(el.textContent)`), not fetched — `fetch()` of a
+     sibling file over `file://` is unreliable across browsers, unlike
+     `<img src>`, which loads local relative paths fine. This is *why* the
+     HTML report works when just double-clicked, no server needed.
+  2. `escape.ts`'s `escapeJsonForScriptTag` replaces every `<` in the
+     serialized JSON with `<` before embedding — otherwise a
+     malicious source filename containing the literal bytes `</script`
+     (impossible from a single filename component on POSIX, since `/` is
+     forbidden in one, but trivially achievable across a real path
+     separator: a directory named `foo<` containing a file named
+     `script>...` — see the regression test in
+     `tests/integration/report-generation.test.ts`) could prematurely
+     close the data tag and inject a sibling `<script>`. The client script
+     itself only ever builds DOM via `createElement`/`textContent`, never
+     `innerHTML` with concatenated strings, so nothing needs
+     HTML-escaping there either. CSP is applied via `<meta>`
+     (`default-src 'none'`, inline script/style allowed since there's no
+     server to hand out nonces, no external resources, no `connect-src`) —
+     `frame-ancestors` is deliberately **not** included, browsers ignore
+     it entirely when delivered via `<meta>` and it just logs a console
+     warning for nothing.
+  3. Verified interactively via Playwright against the real generated
+     HTML (served over a throwaway local HTTP server — Playwright's
+     `file://` navigation is blocked in this environment, so an HTTP
+     server was used purely as a test harness; the report itself is still
+     designed to work directly from `file://`): group list renders,
+     filtering by confidence/relationship/unresolved-only all work,
+     clicking a member sets a decision, "Export decisions" downloads a
+     JSON file that validates against `reviewDecisionsSchema`, zero
+     console errors.
+- `src/domain/review-decision.ts` — `ReviewDecision` + zod schema (PLAN.md
+  §5.4), matched by `schemas/review-decision.schema.json`. Exists now
+  because the HTML report's "export decisions" button needs a schema to
+  target; consumed later by M9's `review import`.
+- **Plumbing gap found and fixed**: `report` has no `--input` flag (it
+  only reads an existing workspace, it doesn't scan), but `configSchema`
+  requires `inputs` unconditionally — so `report --workspace <ws>` with no
+  `--config` failed with "inputs: Required" even against a workspace a
+  real `audit` had just populated. Caught by manually running the actual
+  CLI end-to-end (`audit` then `report`), not by any test. PLAN.md §6's
+  workspace layout already lists `config.resolved.json` for exactly this
+  purpose but nothing had ever written or read it (M1-M7 only ever needed
+  `audit`, a single self-contained command). Fixed with
+  `src/config/resolved-config-file.ts`
+  (`writeResolvedConfig`/`readResolvedConfig`) — `audit` now persists its
+  resolved config into the workspace after `loadConfig` succeeds, and
+  `report`'s `resolveReportConfig()` reads it back when `--config` isn't
+  given, falling back to the normal `loadConfig` contract (still requires
+  `--config` or otherwise-resolvable `inputs`) if the file is missing or
+  no longer validates against the current schema — e.g. a workspace from
+  before this existed, or an intentionally different config file. **If
+  you add a new command that needs to operate against an existing
+  workspace without rescanning, use this same fallback pattern** rather
+  than requiring `--config` unconditionally.
+- `src/cli/package-version.ts` — `readPackageVersion()` extracted out of
+  `cli/index.ts` (it needed the tool version too, for the `--version`
+  flag; the JSON report needs it for `toolVersion`) — no behaviour change,
+  just deduplication.
 
 ### M7 — what was added on top of M1-M6
 

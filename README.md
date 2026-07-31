@@ -13,12 +13,23 @@ restart notes: [`RESTART.md`](./RESTART.md).
 
 ## Status
 
-Early development. Implemented so far: `audit`'s discovery and inventory
-phases (file discovery, format detection, metadata extraction, SHA-256
-hashing, SQLite-backed caching and resumable scans). Duplicate/derivative
-detection, scoring, reporting, review, consolidation, and reference
-migration are not implemented yet — see the milestone issues on this
-repository for progress.
+Early development. Progress against [`PLAN.md` §34](./PLAN.md#34-implementation-order):
+
+- [x] [Milestone 1: project foundation](https://github.com/davidsneighbour/image-dedup/issues/2)
+- [x] [Milestone 2: discovery and inventory](https://github.com/davidsneighbour/image-dedup/issues/3)
+- [x] [Milestone 3: exact duplicates](https://github.com/davidsneighbour/image-dedup/issues/4)
+- [x] [Milestone 4: perceptual matching](https://github.com/davidsneighbour/image-dedup/issues/5)
+- [x] [Milestone 5: confirmation and relationship classification](https://github.com/davidsneighbour/image-dedup/issues/6)
+- [x] [Milestone 6: crop and upscale detection](https://github.com/davidsneighbour/image-dedup/issues/7)
+- [x] [Milestone 7: scoring and recommendations](https://github.com/davidsneighbour/image-dedup/issues/8)
+- [x] [Milestone 8: reports](https://github.com/davidsneighbour/image-dedup/issues/9)
+- [x] [Milestone 9: review import](https://github.com/davidsneighbour/image-dedup/issues/10)
+- [ ] [Milestone 10: consolidation](https://github.com/davidsneighbour/image-dedup/issues/11)
+- [ ] [Milestone 11: reference discovery](https://github.com/davidsneighbour/image-dedup/issues/12)
+- [ ] [Milestone 12: reference replacement and verification](https://github.com/davidsneighbour/image-dedup/issues/13)
+
+See [issue #1](https://github.com/davidsneighbour/image-dedup/issues/1) for
+the tracking epic and milestone-by-milestone discussion.
 
 ## Installation
 

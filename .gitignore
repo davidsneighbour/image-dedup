@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.image-origin/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+.DS_Store
+*.log

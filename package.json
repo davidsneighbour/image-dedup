@@ -1,0 +1,46 @@
+{
+  "name": "image-origin",
+  "version": "0.1.0",
+  "description": "Audit historical website image assets, detect duplicate/derivative relationships, and consolidate curated originals into a canonical directory.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "image-origin": "./dist/cli/index.js"
+  },
+  "files": ["dist", "schemas"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli/index.ts",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.2",
+    "commander": "^12.1.0",
+    "fast-glob": "^3.3.2",
+    "p-limit": "^6.1.0",
+    "sharp": "^0.33.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^22.7.4",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  },
+  "allowScripts": {
+    "@biomejs/biome@1.9.4": true,
+    "better-sqlite3@11.10.0": true,
+    "sharp@0.33.5": true,
+    "esbuild@0.28.1": true,
+    "esbuild@0.21.5": true
+  }
+}

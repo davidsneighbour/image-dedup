@@ -43,12 +43,126 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1, continued through M6)
+## Current state (last updated: 2026-07-31, end of session 1, continued through M7)
 
-**M1-M6 are implemented, tested, and committed** (commits `e329acb`,
-`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`). Next per PLAN.md's
-ordering: M7 (scoring and recommendations, issue #8) — re-read PLAN.md §17
-and §18 before starting it.
+**M1-M7 are implemented, tested, and committed** (commits `e329acb`,
+`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`, `79b0751`). Next per
+PLAN.md's ordering: M8 (reports, JSON + HTML, issue #9) — re-read PLAN.md
+§19 before starting it.
+
+### M7 — what was added on top of M1-M6
+
+- `src/scoring/score-candidate.ts` — the core of PLAN.md §17. `MemberSignals`
+  is the per-record input (detail score, pixel count, bit depth, alpha,
+  ICC, metadata count, path preference score, crop/upscale flags) —
+  `gatherMemberSignals()` derives it from an `ImageRecord` plus the group
+  it's in (crop details come from `group.comparisons`, not from the record
+  itself). `buildScoringContext()` computes group-wide maxima and
+  "does a better alternative exist" flags once per group, so
+  `scoreCandidate()` itself is a pure, cheap, directly-testable function —
+  no I/O, easy to hit with synthetic signals. Score components (native
+  detail, effective resolution, completeness, bit depth, alpha, ICC,
+  metadata, path preference) are weighted and summed; disqualifiers
+  (crop/upscale/missing-alpha, each only when a genuinely better
+  alternative exists in the same group) can zero out a candidate entirely
+  regardless of its raw score — PLAN.md §17.1/§18.2 is explicit that even
+  high confidence must not bypass these.
+- `src/scoring/confidence.ts` — `computeRecommendationConfidence()`. Starts
+  from the group's own relationship confidence (M5), then adjusts for
+  top-vs-second-place score margin, presence of a crop, and presence of an
+  alpha mismatch — deliberately separate from the 0-100 quality score
+  (PLAN.md §18: "confidence and quality score are separate concepts").
+- `src/scoring/explain-score.ts` — `explainRecommendation()`: turns the
+  winning candidate's `reasons`/score and every disqualified candidate's
+  `disqualifiedReasons` into the group-level `reasons`/`warnings` a human
+  reviewer actually reads.
+- `src/scoring/recommend-group-originals.ts` — `recommendGroupOriginal()`,
+  the orchestration entry point. Only touches `kind: "visual"` groups
+  (exact-duplicate groups already got their recommendation from M3's path
+  preference alone — no quality to rank when content is byte-identical).
+  Three-way status split by confidence against
+  `review.manualReviewThreshold`/`review.automaticConfidenceThreshold`:
+  below manual-review threshold → `"ambiguous"`; above automatic threshold
+  *and* a non-disqualified candidate exists → `"automatic"` (only case that
+  sets `recommendedOriginalId`/`score`); otherwise → `"manual-review"`,
+  which still surfaces the top candidate in `reasons` as a suggestion
+  without locking it in — mirrors M3's precedent that only `"automatic"`
+  ever gets a locked-in recommendation.
+- `ImageGroup` gained an optional `score` field (0-100, only present on a
+  `"visual"` group when `recommendedOriginalId` is set — exact-duplicate
+  groups never get one, enforced by `imageGroupSchema`'s `superRefine`).
+- New `config.scoring` section (`src/config/schema.ts`): `weights` (8
+  components, must sum to 100, validated) and `penalties` (4 penalty
+  amounts). A code comment documents that PLAN.md §17.2's "compression
+  quality" and "colour fidelity" components have **no implemented signal**
+  yet (that's unassigned future work, not this milestone) — their points
+  were redistributed across the components that do exist.
+- `src/discovery/run-audit.ts`: after `buildVisualGroups`, every group is
+  scored via `recommendGroupOriginal()` and the result replaces the
+  `"visual"`-kind group set. New `automaticRecommendations` count in
+  `RunAuditResult` and the CLI summary output.
+
+**Two real bugs found via manual CLI testing against the built `dist/`,
+neither caught by unit tests** (both now have regression tests):
+
+1. **`detectCrop` direction-reversal** (`src/analysis/crop-detection.ts`):
+   its "try both directions, keep whichever scores higher" logic had no
+   constraint that the "full" (larger) candidate actually has more pixels
+   than the "crop" candidate. A plain downscale (no real crop at all) could
+   get classified backwards — the smaller thumbnail treated as "containing"
+   the original as a 94%-retained crop of itself. Fixed by filtering
+   candidate directions to require `fullPixels >= cropPixels`. Regression
+   test: `tests/unit/crop-detection.test.ts` — `"never reports the smaller
+   image as the 'larger' (full-frame) side of a crop"`.
+2. **Stale `recordsById` during scoring** (`src/discovery/run-audit.ts`) —
+   the more serious one. `recordsById` was built from `hashedRecords`
+   *before* `detectCropsAndUpscales` ran, and never updated with its
+   `updatedRecords` (the records whose `quality.probableUpscale` just got
+   set). Scoring reads signals via that same `recordsById` map, so it was
+   silently always seeing each record's **pre-detection** quality flags —
+   the `probableUpscale` disqualifier in `scoreCandidate` could never
+   fire in the real pipeline, even though the flag was correctly persisted
+   to the database. A record flagged `probableUpscale: true` in the DB
+   could still win a group's recommendation. Manual CLI testing caught
+   this because the *displayed* recommendation contradicted the *stored*
+   quality flags on inspection; no unit or integration test exercised the
+   full `runAudit()` pipeline closely enough to catch it (the two
+   integration tests that did call `recommendGroupOriginal` did so
+   directly with a hand-built `ImageGroup`, bypassing this exact
+   interaction). Fixed by updating `recordsById` alongside the DB upsert
+   in the `updatedRecords` loop. Regression test added in
+   `tests/integration/crop-upscale-audit.test.ts` (extends the existing
+   "flags a naive upscale" test to also assert the *group recommendation*
+   correctly excludes the flagged record) — verified it fails without the
+   fix (`recommendedOriginalId` stayed `undefined`) and passes with it.
+   **If you add any other quality signal that mutates records mid-pipeline
+   in `run-audit.ts`, check whether it needs the same `recordsById.set()`
+   treatment** — this class of bug (a downstream stage reading a map built
+   before an upstream mutation) is easy to reintroduce.
+
+- Also updated a stale M5-era assertion in
+  `tests/integration/confirmation-audit.test.ts` that predated M7's wiring
+  (`"M5 never recommends an original — that needs M7's scoring"`). That
+  fixture reuses the smooth low-frequency `texturedBuffer()` (chosen for
+  hash/SSIM stability), which has no genuine fine detail beyond what a
+  140px downscale can reconstruct — every full-size derivative in that
+  fixture spuriously trips the `probableUpscale` check against the resized
+  member, so *which* member ends up recommended is an artifact of
+  candidate-graph shape, not a meaningful scoring outcome. Loosened the
+  assertion to just check a recommendation was made and it isn't the
+  unrelated image, and pointed at `tests/integration/scoring-audit.test.ts`
+  (uses a properly-detailed texture) for the real "does scoring pick the
+  right candidate" coverage. **If you need another fixture that exercises
+  both SSIM confirmation *and* upscale detection meaningfully, neither
+  the plain smooth texture nor raw per-pixel noise works** — smooth
+  textures have no genuine detail to lose (upscale detection can't
+  discriminate), and raw per-pixel noise decorrelates too much under
+  resize for SSIM confirmation to pass at all (routes into crop detection
+  instead). A smooth low-frequency base with a *blurred* (not raw) noise
+  overlay gets closer but still isn't fully reliable — this was explored
+  during M7 manual verification and abandoned as a rabbit hole; the
+  existing per-purpose fixtures (separate textures for hash tests, crop
+  tests, and upscale tests) remain the pragmatic answer.
 
 ### M6 — what was added on top of M1-M5
 
@@ -412,40 +526,34 @@ and §18 before starting it.
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #8 (M7:
-   scoring and recommendations) is next per PLAN.md's ordering.
+2. `gh issue list --label type:enhancement` and read open issues — #9 (M8:
+   reports, JSON + HTML) is next per PLAN.md's ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
    (and maybe `npm audit`) to confirm the baseline is still green before
    adding anything.
-4. Re-read PLAN.md §17 (source-quality ranking), §18 (confidence
-   calculation), and §16 (group construction — re-check M5's
-   representative-validated-clique approach still makes sense once
-   scoring exists) before starting M7. Notes:
-   - This is the milestone where `recommendedOriginalId` finally gets set
-     and `status: "automatic"` becomes reachable — every prior milestone
-     deliberately stopped short of this. The hard disqualifiers in §17.1
-     (corrupted, detected crop with a complete candidate available,
-     probable upscale with a genuine smaller source, etc.) map directly
-     onto signals M3-M6 already recorded (`quality.probableUpscale`, crop
-     relationships, `warnings` on groups) — this milestone's job is
-     mostly *consuming* those signals into a score, not inventing new
-     detectors.
-   - **Still-unresolved limitation carried over from M6**: crop detection
-     only ever examines pairs already classified `"unknown"` by M5. A
-     crop with high retained-area can sometimes pass SSIM confirmation
-     outright and get classified `"resize"` before crop detection ever
-     sees it — crop detection currently never re-examines already
-     *confirmed* pairs to check whether they're actually a crop.
-     `classifyRelationship()` in `relationship-classifier.ts` has no
-     special handling for this either. Worth deciding in M7 whether
-     scoring should treat suspiciously-high-retained-"resize" pairs with
-     extra caution, or whether crop detection should be widened to also
-     re-examine confirmed pairs (more expensive, not done for this
-     reason).
-   - `review.automaticConfidenceThreshold` / `review.manualReviewThreshold`
-     already exist in config and are already used by M5's
-     `buildVisualGroups` for the `manual-review`/`ambiguous` split — M7
-     needs to be the one that actually reaches `"automatic"`.
+4. Re-read PLAN.md §19 (report generation) before starting M8. Notes:
+   - Every signal M8's reports need already exists and is persisted:
+     `ImageRecord` (inventory), `comparisons` (relationships, including
+     crop/upscale warnings), and `groups` (now carrying `score`,
+     `confidence`, `status`, `reasons`, `warnings`,
+     `recommendedOriginalId` as of M7). This milestone is about
+     *presenting* existing data, not computing anything new — resist the
+     temptation to add new detection/scoring logic here.
+   - PLAN.md's report almost certainly needs to distinguish
+     `"automatic"` / `"manual-review"` / `"ambiguous"` groups clearly
+     (the reviewer's whole job in M9 depends on being able to find the
+     groups that need their attention) — check §19's exact field/section
+     requirements before designing the JSON shape, then design the HTML
+     as a view over that same JSON rather than a separate data path.
+   - No network calls for HTML report rendering (inline CSS/JS only, no
+     CDN dependencies) — same constraint as everywhere else in this repo
+     (PLAN.md §35, and see this repo's own Artifact-equivalent rule of
+     thumb: self-contained, no external requests).
+   - Re-read the M7 section above's note on `recordsById` staleness before
+     touching `run-audit.ts` again — if M8 needs any additional
+     per-record data computed mid-pipeline, make sure whatever map feeds
+     the report generator is built (or refreshed) *after* that data
+     exists, not before.
 
 ### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 

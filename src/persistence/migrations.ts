@@ -81,6 +81,12 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE comparisons ADD COLUMN details_json TEXT;
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

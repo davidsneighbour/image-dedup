@@ -16,6 +16,8 @@ export interface ConfirmedComparison {
   transformUsed: OrientationTransform;
   reasons: string[];
   warnings: string[];
+  /** Relationship-specific structured data (e.g. a crop's `cropBox`/`retainedArea`), added by whichever detector produced it. */
+  details?: Record<string, unknown>;
 }
 
 const ROTATION_MIRROR_TRANSFORMS: readonly OrientationTransform[] = [

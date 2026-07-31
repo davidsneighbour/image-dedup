@@ -7,7 +7,7 @@ const ssim = ssimModule.ssim;
 export type { OrientationTransform };
 
 async function toImageData(
-  path: string,
+  path: string | Buffer,
   size: number,
   transform: OrientationTransform,
 ): Promise<{ data: Uint8ClampedArray; width: number; height: number }> {
@@ -35,8 +35,8 @@ async function toImageData(
  * images and doesn't bias the comparison.
  */
 export async function compareAtScale(
-  pathA: string,
-  pathB: string,
+  pathA: string | Buffer,
+  pathB: string | Buffer,
   size: number,
   transformB: OrientationTransform = "none",
 ): Promise<number> {

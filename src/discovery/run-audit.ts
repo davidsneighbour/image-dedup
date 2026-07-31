@@ -7,6 +7,7 @@ import { inspectImage } from "../inventory/inspect-image.js";
 import { buildVisualGroups } from "../matching/build-visual-groups.js";
 import { generateCandidatePairs } from "../matching/candidate-index.js";
 import { confirmCandidatePairs } from "../matching/confirm-candidates.js";
+import { detectCropsAndUpscales } from "../matching/detect-crops-and-upscales.js";
 import { computeExactDuplicateGroups } from "../matching/exact-duplicates.js";
 import { computeMissingHashes } from "../matching/hash-images.js";
 import { computeOrientationVariants } from "../matching/orientation-hashes.js";
@@ -45,6 +46,8 @@ export interface RunAuditResult {
   confirmedRelationships: number;
   unconfirmedPairs: number;
   visualGroups: number;
+  cropsDetected: number;
+  probableUpscalesDetected: number;
 }
 
 /**
@@ -114,6 +117,8 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   let confirmedRelationships = 0;
   let unconfirmedPairs = 0;
   let visualGroups = 0;
+  let cropsDetected = 0;
+  let probableUpscalesDetected = 0;
 
   try {
     const limit = pLimit(config.concurrency.metadata);
@@ -217,13 +222,29 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
         detectRotation: config.matching.detectRotation,
         concurrency: config.concurrency.comparison,
       });
-      replaceComparisons(db, confirmed);
-      confirmedRelationships = confirmed.filter(
+      // Crop detection (PLAN.md §12) re-examines unconfirmed pairs;
+      // probable-upscale detection (§13) checks confirmed pairs with a
+      // meaningful size difference. Neither ever deletes or rejects
+      // anything — crop adds a relationship, upscale adds a quality flag.
+      const cropsAndUpscales = await detectCropsAndUpscales(confirmed, hashedRecords, recordsById, {
+        detectCrops: config.matching.detectCrops,
+        detectUpscaling: config.quality.detectUpscaling,
+        concurrency: config.concurrency.comparison,
+      });
+      for (const record of cropsAndUpscales.updatedRecords) {
+        upsertImageRecord(db, record);
+      }
+      cropsDetected = cropsAndUpscales.cropsDetected;
+      probableUpscalesDetected = cropsAndUpscales.probableUpscalesDetected;
+
+      const finalComparisons = cropsAndUpscales.comparisons;
+      replaceComparisons(db, finalComparisons);
+      confirmedRelationships = finalComparisons.filter(
         (comparison) => comparison.relationship !== "unknown",
       ).length;
-      unconfirmedPairs = confirmed.length - confirmedRelationships;
+      unconfirmedPairs = finalComparisons.length - confirmedRelationships;
 
-      const visualGroupResult = buildVisualGroups(confirmed, config.review);
+      const visualGroupResult = buildVisualGroups(finalComparisons, config.review);
       replaceGroupsOfKind(db, "visual", visualGroupResult);
       visualGroups = visualGroupResult.length;
     }
@@ -252,6 +273,12 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
       `  Confirmed ${confirmedRelationships} relationships, left ${unconfirmedPairs} unconfirmed`,
     );
     logger.info(`  Found ${visualGroups} probable derivative groups`);
+    if (config.matching.detectCrops && cropsDetected > 0) {
+      logger.info(`  Detected ${cropsDetected} probable crops`);
+    }
+    if (config.quality.detectUpscaling && probableUpscalesDetected > 0) {
+      logger.info(`  Flagged ${probableUpscalesDetected} probable upscales`);
+    }
   }
 
   return {
@@ -267,5 +294,7 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
     confirmedRelationships,
     unconfirmedPairs,
     visualGroups,
+    cropsDetected,
+    probableUpscalesDetected,
   };
 }

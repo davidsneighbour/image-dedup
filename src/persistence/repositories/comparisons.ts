@@ -10,6 +10,7 @@ interface ComparisonRow {
   transform: string;
   reasons_json: string;
   warnings_json: string;
+  details_json: string | null;
   updated_at: string;
 }
 
@@ -23,6 +24,9 @@ function rowToComparison(row: ComparisonRow): ConfirmedComparison {
     transformUsed: row.transform as ConfirmedComparison["transformUsed"],
     reasons: JSON.parse(row.reasons_json) as string[],
     warnings: JSON.parse(row.warnings_json) as string[],
+    ...(row.details_json
+      ? { details: JSON.parse(row.details_json) as Record<string, unknown> }
+      : {}),
   };
 }
 
@@ -38,8 +42,8 @@ export function replaceComparisons(
   comparisons: readonly ConfirmedComparison[],
 ): void {
   const insertStatement = db.prepare(
-    `INSERT INTO comparisons (a, b, relationship, confidence, ssim_score, transform, reasons_json, warnings_json, updated_at)
-     VALUES (@a, @b, @relationship, @confidence, @ssimScore, @transformUsed, @reasonsJson, @warningsJson, @updatedAt)`,
+    `INSERT INTO comparisons (a, b, relationship, confidence, ssim_score, transform, reasons_json, warnings_json, details_json, updated_at)
+     VALUES (@a, @b, @relationship, @confidence, @ssimScore, @transformUsed, @reasonsJson, @warningsJson, @detailsJson, @updatedAt)`,
   );
 
   db.transaction(() => {
@@ -55,6 +59,7 @@ export function replaceComparisons(
         transformUsed: comparison.transformUsed,
         reasonsJson: JSON.stringify(comparison.reasons),
         warningsJson: JSON.stringify(comparison.warnings),
+        detailsJson: comparison.details ? JSON.stringify(comparison.details) : null,
         updatedAt,
       });
     }

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
@@ -86,6 +86,12 @@ export async function buildFixtureTree(): Promise<FixtureTree> {
 
   // Unsupported non-image file, image-like extension excluded by default include glob.
   await writeFile(join(inputDir, "notes.txt"), "not an image");
+
+  // Exact duplicate: a real, separate copy of red.jpg's bytes (distinct
+  // inode, identical content) under a different directory, for M3's
+  // exact-duplicate grouping.
+  await mkdir(join(inputDir, "backups", "originals"), { recursive: true });
+  await copyFile(redJpegPath, join(inputDir, "backups", "originals", "red-copy.jpg"));
 
   // Duplicate path via symlink to an already-discovered file. Named to sort
   // after "red.jpg" so discovery's deterministic (alphabetical) processing

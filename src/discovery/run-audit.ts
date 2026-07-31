@@ -4,9 +4,15 @@ import pLimit from "p-limit";
 import type { Logger } from "../cli/output.js";
 import type { ImageOriginConfig } from "../config/schema.js";
 import { inspectImage } from "../inventory/inspect-image.js";
+import { computeExactDuplicateGroups } from "../matching/exact-duplicates.js";
 import { openDatabase } from "../persistence/database.js";
 import { recordScanError } from "../persistence/repositories/errors.js";
-import { findCachedRecord, upsertImageRecord } from "../persistence/repositories/image-records.js";
+import { replaceGroupsOfKind } from "../persistence/repositories/groups.js";
+import {
+  findCachedRecord,
+  listImageRecords,
+  upsertImageRecord,
+} from "../persistence/repositories/image-records.js";
 import { type DiscoveryEntry, discoverFiles } from "./discover-files.js";
 
 export interface RunAuditOptions {
@@ -24,6 +30,8 @@ export interface RunAuditResult {
   inspected: number;
   reusedFromCache: number;
   errors: number;
+  exactDuplicateGroups: number;
+  wastedBytes: number;
 }
 
 /**
@@ -85,6 +93,8 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   let inspected = 0;
   let reusedFromCache = 0;
   let errorCount = 0;
+  let exactDuplicateGroups = 0;
+  let wastedBytes = 0;
 
   try {
     const limit = pLimit(config.concurrency.metadata);
@@ -130,6 +140,15 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
         }),
       ),
     );
+
+    // Recomputed from every currently-inventoried record (not just this
+    // run's newly-scanned ones), so a duplicate spanning an earlier and a
+    // later scan is still detected. See PLAN.md §9.
+    const allRecords = listImageRecords(db);
+    const exactDuplicates = computeExactDuplicateGroups(allRecords, config.pathPreferences);
+    replaceGroupsOfKind(db, "exact-duplicate", exactDuplicates.groups);
+    exactDuplicateGroups = exactDuplicates.groups.length;
+    wastedBytes = exactDuplicates.wastedBytes;
   } finally {
     db.close();
   }
@@ -139,10 +158,20 @@ export async function runAudit(options: RunAuditOptions): Promise<RunAuditResult
   logger.info(`  Reused ${reusedFromCache} cached records`);
   if (errorCount > 0) logger.info(`  Recorded ${errorCount} errors`);
 
+  logger.info("Matching");
+  logger.info(`  Found ${exactDuplicateGroups} exact duplicate groups`);
+  if (wastedBytes > 0) {
+    logger.info(
+      `  ${(wastedBytes / (1024 * 1024)).toFixed(2)} MB recoverable from exact duplicates`,
+    );
+  }
+
   return {
     ...counts,
     inspected,
     reusedFromCache,
     errors: errorCount,
+    exactDuplicateGroups,
+    wastedBytes,
   };
 }

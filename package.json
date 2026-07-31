@@ -25,6 +25,7 @@
     "commander": "^12.1.0",
     "fast-glob": "^3.3.2",
     "p-limit": "^6.1.0",
+    "picomatch": "4.0.5",
     "sharp": "^0.33.5",
     "zod": "^3.23.8"
   },
@@ -32,15 +33,16 @@
     "@biomejs/biome": "^1.9.4",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22.7.4",
+    "@types/picomatch": "4.0.3",
     "tsx": "^4.19.1",
     "typescript": "^5.6.2",
     "vitest": "^2.1.1"
   },
   "allowScripts": {
     "@biomejs/biome@1.9.4": true,
-    "better-sqlite3@11.10.0": true,
     "sharp@0.33.5": true,
     "esbuild@0.28.1": true,
-    "esbuild@0.21.5": true
+    "esbuild@0.21.5": true,
+    "better-sqlite3@13.0.2": true
   }
 }

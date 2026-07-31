@@ -18,6 +18,9 @@ export interface ImageRecord {
     modifiedAt: string;
     createdAt?: string;
     sha256: string;
+    /** Used to detect hard links (PLAN.md §9: "mark hard links separately where detectable"). */
+    inode: number;
+    device: number;
   };
 
   image: {

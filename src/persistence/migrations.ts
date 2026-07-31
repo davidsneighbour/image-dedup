@@ -38,6 +38,18 @@ export const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE groups (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,
+        group_json  TEXT NOT NULL,
+        updated_at  TEXT NOT NULL
+      );
+      CREATE INDEX idx_groups_kind ON groups (kind);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

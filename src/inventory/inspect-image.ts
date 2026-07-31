@@ -43,6 +43,8 @@ export async function inspectImage(options: InspectImageOptions): Promise<ImageR
       modifiedAt: stats.mtime.toISOString(),
       createdAt: stats.birthtime.toISOString(),
       sha256,
+      inode: stats.ino,
+      device: stats.dev,
     },
     image: metadata.image,
     metadata: metadata.metadata,

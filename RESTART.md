@@ -43,12 +43,63 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1)
+## Current state (last updated: 2026-07-31, end of session 1, continued into M3)
 
-**M1 (project foundation) and M2 (discovery + inventory) are implemented,
-tested, and committed.** Per PLAN.md §38's explicit instruction, work
-stopped here — do not start M3 (perceptual matching / exact duplicates)
-without re-reading §38's gate conditions below and confirming them.
+**M1 (project foundation), M2 (discovery + inventory), and M3 (exact
+duplicates) are implemented, tested, and committed** (commits `e329acb`,
+`6375433`, `b3b50a8`). Next per PLAN.md's ordering: M4 (perceptual
+matching, issue #5) — re-read PLAN.md §10 before starting it.
+
+### M3 — what was added on top of M1/M2
+
+- `src/domain/relationship.ts` — `ImageRelationship` union (§5.2). Only
+  `"exact-duplicate"` is actually produced so far; the rest of the union
+  exists now so the type doesn't change shape as M4-M6 add their detectors.
+- `src/domain/image-group.ts` — `ImageGroup`/`ImageComparison` interfaces
+  (§5.3) plus a zod `imageGroupSchema` used to validate every group before
+  it's persisted. Added a `kind: "exact-duplicate"` discriminator not
+  present in PLAN.md's interface verbatim — needed because different
+  detectors (exact hash now, perceptual from M4) produce groups that must
+  be recomputed/replaced independently; §19's report summary already
+  implies this by tracking `exactDuplicateGroups` and `visualGroups`
+  separately.
+- `src/matching/exact-duplicates.ts` — `computeExactDuplicateGroups()`.
+  Pure function, no I/O: buckets records by `file.sha256`, produces a
+  deterministic `grp_<sha256 prefix>` id per bucket (content-derived, so
+  re-running never changes an unchanged group's id), computes storage
+  waste, detects hard links (same `file.device`+`file.inode`), and only
+  sets `recommendedOriginalId`/`status: "automatic"` when a configured
+  `pathPreferences` entry makes the choice unambiguous — otherwise
+  `status: "manual-review"`. There is deliberately no quality-based
+  ranking here: members are byte-identical, so nothing to rank by (that
+  starts at M7, for non-identical derivatives).
+- `src/matching/path-preferences.ts` — `scorePathPreference()`, glob
+  matching via `picomatch` (added as a new dependency) against
+  `relativePath`.
+- `src/persistence/repositories/groups.ts` + migration v2 (`groups`
+  table). Groups are treated as fully derived data: every audit run
+  recomputes exact-duplicate groups from *all* currently-inventoried
+  records (via `listImageRecords`, not just this run's newly-scanned
+  ones) and replaces the whole `exact-duplicate`-kind set in one
+  transaction. This means a duplicate pair split across two separate scans
+  (file A scanned today, identical file B added next week) is still
+  caught on the next run — there's no incremental-group-patching logic to
+  get subtly wrong.
+- `ImageRecord.file` gained `inode`/`device` (populated from `fs.stat()`
+  in `inspect-image.ts`) — needed for hard-link detection, nothing else
+  currently reads them.
+- `runAudit()` now has a third phase after Discovery/Inventory: "Matching"
+  — logs exact-duplicate group count and recoverable MB, returns
+  `exactDuplicateGroups`/`wastedBytes` on the result.
+- Dependency bump: `sharp` `^0.33.5` → `0.35.3` and `vitest` `^2.1.1` →
+  `4.1.10`, to clear known CVEs (sharp inherited libvips CVEs — directly
+  relevant given PLAN.md §31's "treat image files as untrusted input"
+  requirement; vitest's dev-dependency chain had a critical "Vitest UI
+  server can read arbitrary files" advisory). `npm audit` and GitHub
+  Dependabot are both clean as of this commit — re-run `npm audit` if
+  resuming much later, advisories accumulate over time.
+
+### Previous state (M1 + M2), for reference — still accurate
 
 ### What exists
 
@@ -137,14 +188,18 @@ without re-reading §38's gate conditions below and confirming them.
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #4 (M3:
-   exact duplicates) is next per PLAN.md's ordering, but re-read §38's gate
-   first (below).
+2. `gh issue list --label type:enhancement` and read open issues — #5 (M4:
+   perceptual matching) is next per PLAN.md's ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
-   to confirm the baseline is still green before adding anything.
-4. Re-read PLAN.md §9 (exact duplicates) before starting M3.
+   (and maybe `npm audit`) to confirm the baseline is still green before
+   adding anything.
+4. Re-read PLAN.md §10 (perceptual hashing and candidate generation)
+   before starting M4. Note it needs a perceptual-hash implementation
+   (pHash/dHash or equivalent) and a candidate index (BK-tree or bucket
+   strategy) that scales to 50,000+ files without all-pairs comparison —
+   neither dependency nor approach has been chosen yet.
 
-### Gate before starting M3 (PLAN.md §38, verify all before proceeding)
+### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 
 - [x] discovery is deterministic (tested)
 - [x] metadata extraction is tested
@@ -153,8 +208,10 @@ without re-reading §38's gate conditions below and confirming them.
 - [x] interrupted scans can resume (tested via simulated pre-existing record)
 - [x] fixture-based integration tests pass
 
-All boxes above were true as of the end of this session — re-verify by
-actually running the test suite, don't just trust this checklist.
+PLAN.md doesn't specify an equivalent explicit gate before M4, but the
+same spirit applies: M3 (exact duplicates) is tested and stable as of this
+commit — re-verify by actually running the test suite, don't just trust
+this checklist.
 
 ## Constraints to keep re-reading (easy to forget)
 

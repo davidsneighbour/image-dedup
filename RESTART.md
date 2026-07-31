@@ -43,12 +43,68 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1, continued into M3)
+## Current state (last updated: 2026-07-31, end of session 1, continued through M4)
 
-**M1 (project foundation), M2 (discovery + inventory), and M3 (exact
-duplicates) are implemented, tested, and committed** (commits `e329acb`,
-`6375433`, `b3b50a8`). Next per PLAN.md's ordering: M4 (perceptual
-matching, issue #5) — re-read PLAN.md §10 before starting it.
+**M1 (project foundation), M2 (discovery + inventory), M3 (exact
+duplicates), and M4 (perceptual matching) are implemented, tested, and
+committed** (commits `e329acb`, `6375433`, `b3b50a8`, `e8a1b3f`). Next per
+PLAN.md's ordering: M5 (confirmation and relationship classification,
+issue #6) — re-read PLAN.md §11 and §15 before starting it.
+
+### M4 — what was added on top of M1/M2/M3
+
+- `src/matching/perceptual-hash.ts` — `computeDifferenceHash` (dHash: 9x8
+  greyscale grid, horizontal-gradient bits) and `computePerceptualHash`
+  (pHash: 32x32 greyscale → 2D DCT-II via a precomputed cosine basis
+  matrix → top-left 8x8 low-frequency block, thresholded against its own
+  median). Both return 16-hex-char (64-bit) hashes. `hammingDistanceHex`
+  compares two such hashes via nibble-XOR popcount.
+  - **Important gotcha if touching this code**: a plain smooth gradient is
+    a pathological test image for DCT-based pHash — it concentrates
+    nearly all DCT energy into ~7 coefficients, leaving the rest of the
+    8x8 block near-zero, so the median sits near zero and unrelated noise
+    (resize interpolation, JPEG quantization) flips ~20-30% of bits
+    essentially at random. This isn't a bug; real photographs have
+    texture across many frequencies and don't hit this. Test fixtures use
+    a synthetic multi-frequency sine/cosine pattern (see
+    `texturedBuffer()`/`richTextureBuffer()` in the test files) instead of
+    a gradient, specifically because of this. If you see mysteriously
+    large Hamming distances between a source and its resize/format
+    conversion in a new test, suspect the test image's texture first.
+- `src/matching/bk-tree.ts` — generic `BKTree<T>` keyed by a caller-supplied
+  distance function. Items at distance 0 from an existing node share that
+  node's `items[]` list rather than becoming a child (correct, since
+  Hamming distance is a proper metric: two items with distance 0 between
+  them are equidistant from any third point) — this also avoids silently
+  dropping hash-collision items, which a naive "one item per node, skip on
+  d===0" implementation would do.
+- `src/matching/candidate-index.ts` — `generateCandidatePairs()`: buckets
+  records by aspect ratio (bucket width = `4 * aspectRatioTolerance`,
+  neighbouring buckets included per query so boundary cases aren't
+  missed), builds one BK-tree per bucket pool, queries each record against
+  it. A pair is only kept if dHash distance, pHash distance, AND the
+  precise aspect-ratio delta all clear their configured thresholds.
+  Excludes pairs that are already exact duplicates (same SHA-256).
+- `src/matching/hash-images.ts` — `computeMissingHashes()`: skips records
+  that already have both hashes (same across-run caching philosophy as
+  everything else), and deduplicates by SHA-256 before decoding — only one
+  representative per distinct content hash is actually decoded, the rest
+  copy its result.
+- `src/domain/candidate-pair.ts` — `PerceptualCandidatePair`. Deliberately
+  *not* an `ImageGroup`: a hash match is a candidate signal only (§10.2),
+  not confirmation. Confirmation (SSIM etc.) and turning candidates into
+  actual `ImageGroup`s with a relationship/confidence is M5's job — don't
+  short-circuit that by upgrading candidate pairs to groups prematurely.
+- New `candidate_pairs` SQLite table (migration v3), same
+  recompute-and-replace-wholesale pattern as `groups`.
+- Fixed a gap from M3: exact-duplicate matching had been running
+  unconditionally; it and perceptual matching are now both gated on
+  `config.matching.exactHash`/`config.matching.perceptualHash`.
+- `runAudit()`'s "Matching" log section now also reports hashes
+  computed/reused and candidate pair count, labelled "(pending
+  confirmation)" to avoid implying these are final relationships.
+
+### Previous state (M1 + M2 + M3), for reference — still accurate
 
 ### M3 — what was added on top of M1/M2
 
@@ -188,16 +244,22 @@ matching, issue #5) — re-read PLAN.md §10 before starting it.
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #5 (M4:
-   perceptual matching) is next per PLAN.md's ordering.
+2. `gh issue list --label type:enhancement` and read open issues — #6 (M5:
+   confirmation and relationship classification) is next per PLAN.md's
+   ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
    (and maybe `npm audit`) to confirm the baseline is still green before
    adding anything.
-4. Re-read PLAN.md §10 (perceptual hashing and candidate generation)
-   before starting M4. Note it needs a perceptual-hash implementation
-   (pHash/dHash or equivalent) and a candidate index (BK-tree or bucket
-   strategy) that scales to 50,000+ files without all-pairs comparison —
-   neither dependency nor approach has been chosen yet.
+4. Re-read PLAN.md §11 (visual confirmation: SSIM, alpha comparison,
+   rotation/mirroring) and §15 (relationship classification rules) before
+   starting M5. Note M5 needs an SSIM implementation (PLAN.md §3.1 lists
+   this as a dependency to add — none chosen yet) and turns M4's
+   unconfirmed `candidate_pairs` into classified `ImageGroup`s with an
+   `ImageRelationship` (resize/format-conversion/recompression/crop/etc.)
+   — this is also where per PLAN.md §16, pairwise relationships get
+   converted into actual groups (connected-components-ish, but cautious
+   about weak-chain over-merging: "A resembles B, B resembles C" must not
+   force "A resembles C").
 
 ### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 

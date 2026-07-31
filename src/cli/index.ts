@@ -6,6 +6,7 @@ import { registerConsolidateCommand } from "./commands/consolidate.js";
 import { registerReferencesCommand } from "./commands/references.js";
 import { registerReportCommand } from "./commands/report.js";
 import { registerReviewCommand } from "./commands/review.js";
+import { registerRollbackCommand } from "./commands/rollback.js";
 import { registerVerifyCommand } from "./commands/verify.js";
 import { CliError, ExitCode } from "./exit-codes.js";
 import { Logger } from "./output.js";
@@ -26,6 +27,7 @@ export function createProgram(): Command {
   registerReportCommand(program);
   registerReviewCommand(program);
   registerConsolidateCommand(program);
+  registerRollbackCommand(program);
   registerReferencesCommand(program);
   registerVerifyCommand(program);
 

@@ -87,6 +87,25 @@ export const MIGRATIONS: Migration[] = [
       ALTER TABLE comparisons ADD COLUMN details_json TEXT;
     `,
   },
+  {
+    version: 6,
+    sql: `
+      CREATE TABLE operations (
+        operation_id      TEXT PRIMARY KEY,
+        run_id            TEXT NOT NULL,
+        type              TEXT NOT NULL,
+        source            TEXT NOT NULL,
+        destination       TEXT NOT NULL,
+        source_hash       TEXT NOT NULL,
+        destination_hash  TEXT,
+        status            TEXT NOT NULL,
+        created_at        TEXT NOT NULL,
+        rolled_back_at    TEXT
+      );
+      CREATE INDEX idx_operations_run_id ON operations (run_id);
+      CREATE INDEX idx_operations_destination ON operations (destination);
+    `,
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {

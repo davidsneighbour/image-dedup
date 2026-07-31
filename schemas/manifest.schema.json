@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/davidsneighbour/image-dedup/schemas/manifest.schema.json",
+  "title": "image-origin canonical manifest",
+  "description": "Shape of <originalsDirectory>/manifest.json, written by `image-origin consolidate --apply` (PLAN.md §24). Hand-maintained alongside src/domain/manifest.ts's zod schema, which is the authoritative runtime validator.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "toolVersion", "images"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "toolVersion": { "type": "string", "minLength": 1 },
+    "images": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "canonicalPath",
+          "sha256",
+          "width",
+          "height",
+          "format",
+          "hasAlpha",
+          "selectedFrom",
+          "relationships",
+          "selection"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "canonicalPath": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "width": { "type": "integer", "exclusiveMinimum": 0 },
+          "height": { "type": "integer", "exclusiveMinimum": 0 },
+          "format": { "type": "string", "minLength": 1 },
+          "hasAlpha": { "type": "boolean" },
+          "selectedFrom": { "type": "array", "items": { "type": "string" } },
+          "relationships": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "type", "confidence"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "type": { "type": "string", "minLength": 1 },
+                "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+              }
+            }
+          },
+          "selection": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "confidence", "reasons"],
+            "properties": {
+              "method": { "enum": ["automatic", "manual", "standalone"] },
+              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "reasons": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    }
+  }
+}

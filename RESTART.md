@@ -43,12 +43,101 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-07-31, end of session 1, continued through M5)
+## Current state (last updated: 2026-07-31, end of session 1, continued through M6)
 
-**M1-M5 are implemented, tested, and committed** (commits `e329acb`,
-`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`). Next per PLAN.md's ordering:
-M6 (crop and upscale detection, issue #7) — re-read PLAN.md §12 and §13
-before starting it.
+**M1-M6 are implemented, tested, and committed** (commits `e329acb`,
+`6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`). Next per PLAN.md's
+ordering: M7 (scoring and recommendations, issue #8) — re-read PLAN.md §17
+and §18 before starting it.
+
+### M6 — what was added on top of M1-M5
+
+- `src/analysis/crop-detection.ts` — `detectCrop()`. Two-stage, and both
+  stages matter (testing found real bugs in each, see below):
+  1. **Coarse search**: downscales both images to a 32x32 greyscale grid
+     (same idea as pHash), then does a coarse-to-fine sliding-window
+     Pearson-correlation search for the best-matching axis-aligned
+     subregion (step 2, then a step-1 refinement pass around the coarse
+     best). The refinement pass is not optional: a plain step-2 search
+     only ever visits even-valued widths/positions, so a true-best box
+     needing e.g. an odd width is simply never evaluated — this
+     genuinely caused a real crop fixture to go undetected until fixed.
+  2. **Real-pixel SSIM verification**: extracts the *actual* pixel region
+     the coarse search proposed from the full-resolution source and
+     compares it via real SSIM against the crop candidate, with a small
+     local pixel-space refinement (the coarse grid's own quantization —
+     one grid cell can be 10+ real pixels — can misalign fine detail
+     enough to tank SSIM even when the coarse correlation looked good).
+     **This stage exists because of a real false-positive bug**: the
+     coarse correlation search alone is a "look-elsewhere" problem —
+     across hundreds of candidate boxes, images that only share similar
+     smooth low-frequency structure occasionally correlated above the
+     confidence threshold on *some* subregion purely by chance, even
+     between genuinely unrelated images. Caught by testing with properly
+     unrelated (differently-seeded) synthetic fixtures — an earlier
+     manual check that reused identical noise across "unrelated" fixtures
+     masked this initially. If you touch this file, re-verify false
+     positives are still suppressed with genuinely independent test
+     images, not images sharing a noise seed/generator.
+  - `MIN_CONFIDENCE` (coarse) and `SSIM_VERIFICATION_THRESHOLD` (precise)
+    are both local constants, not config — revisit if false
+    positives/negatives show up on real data.
+- `src/matching/crop-candidates.ts` — `generateCropCandidatePairs()`.
+  **Necessary because of another real gap**: M4/M5's standard candidate
+  threshold (`matching.perceptualDistanceThreshold`, default 10) is tuned
+  for "same framing" relationships (resize/recompression/format
+  conversion) and is nowhere near permissive enough for a genuine crop to
+  ever become a candidate pair — cropping removes real content, which is
+  a much bigger perceptual hash change than those relationships produce.
+  Without this, crop detection had *nothing to examine* in realistic
+  scenarios; it wasn't just under-sensitive, it never ran at all. This
+  runs a wider (`CROP_CANDIDATE_DISTANCE_THRESHOLD = 28`), dHash-only,
+  **non**-aspect-ratio-bucketed BK-tree search (crops routinely change
+  aspect ratio, so M4's bucketing would defeat the purpose) to produce
+  extra placeholder pairs fed into crop detection alongside M5's
+  already-unconfirmed ones.
+  - **Known, deliberate, still-unfixed limitation**: this search is
+    still not fully aspect-ratio-independent in spirit — it's a single
+    flat BK-tree so aspect ratio doesn't gate it directly, but a crop
+    whose dHash ends up more than 28/64 bits different from its source
+    (very aggressive crops, or crops combined with heavy recompression)
+    will still be missed. Widening the threshold further trades more
+    false-candidate load (cost: more crop-detection SSIM work per audit)
+    against catching more real crops — no config knob for this yet.
+- `src/analysis/upscale-detection.ts` — `detectProbableUpscale()`. Laplacian
+  convolution (`sharp().convolve()`) + stdev as a detail/sharpness score,
+  compared between the larger image and the smaller candidate naively
+  upscaled to the same analysis resolution (capped at 512px). Both scores
+  computed at *matched* resolution — comparing raw detail scores at
+  different resolutions would be meaningless.
+  - **Test fixtures needed real per-pixel noise, not the smooth
+    multi-frequency texture used everywhere else in this codebase's
+    tests.** A smooth function of normalized position looks identical at
+    any resolution (nothing genuine is lost by downscaling then
+    upscaling it), so it can't distinguish "genuine extra detail" from
+    "naive upscale" at all — see `detailedTexturedBuffer()` in the test
+    files for the noise-based alternative, and use it (with a distinct
+    seed per image) for any new test involving this detector.
+- `src/matching/detect-crops-and-upscales.ts` — orchestrates both:
+  crop detection runs over every `"unknown"` comparison (M5's plus the
+  wider crop-only candidates above); upscale detection runs over every
+  *confirmed* comparison where one image has meaningfully more pixels
+  (`MIN_AREA_RATIO_FOR_UPSCALE_CHECK = 1.2`) than the other. Sets
+  `ImageRecord.quality.probableUpscale`/`detailScore` on the larger
+  image and adds a warning; never deletes, rejects, or auto-merges
+  anything — actual scoring/ranking against these signals is M7's job.
+- `src/matching/similarity.ts`'s `compareAtScale`/`compareMultiScale` now
+  accept `string | Buffer` (not just file paths) for their image inputs —
+  needed so crop detection can SSIM-verify an in-memory `sharp().extract()`
+  buffer without writing a temp file.
+- `ConfirmedComparison` gained an optional `details` bag (mirrors
+  `ImageComparison.details` in the domain model) so a crop's
+  `cropBox`/`retainedArea`/`largerImageId`/`croppedImageId` can travel
+  from detection through to the persisted `comparisons` row and into any
+  group's comparison list. New `comparisons.details_json` column
+  (migration v5).
+
+### Previous state (M1-M5), for reference — still accurate
 
 ### M5 — what was added on top of M1-M4
 
@@ -323,32 +412,40 @@ before starting it.
 
 1. `git status` and `git log` to confirm what's actually committed vs. this
    doc's claims (this doc can go stale — trust the repo over the doc).
-2. `gh issue list --label type:enhancement` and read open issues — #7 (M6:
-   crop and upscale detection) is next per PLAN.md's ordering.
+2. `gh issue list --label type:enhancement` and read open issues — #8 (M7:
+   scoring and recommendations) is next per PLAN.md's ordering.
 3. Run `npm run lint && npm run typecheck && npm test && npm run build`
    (and maybe `npm audit`) to confirm the baseline is still green before
    adding anything.
-4. Re-read PLAN.md §12 (crop detection) and §13 (probable upscaling
-   detection) before starting M6. Notes:
-   - Crop detection needs subregion/feature matching (§12.1) — nothing
-     like that exists yet; the closest prior art in this codebase is the
-     DCT machinery in `perceptual-hash.ts`, which isn't directly reusable
-     for sliding-window correlation.
-   - §12.3's safety rule ("never automatically discard a crop") and
-     §13.3's ("penalize, don't reject outright") both fit the pattern
-     already established: M5 already refuses to auto-recommend an
-     original; M6 should add penalties/flags to existing groups, not
-     start recommending yet — that's still M7.
-   - There's a known, documented limitation from M5 worth fixing here: a
-     crop with high remaining-content overlap can currently pass SSIM
-     confirmation and get misclassified as a plain "resize" (see the
-     comment on `classifyRelationship` in `relationship-classifier.ts`).
-     M6's crop detector should run *before* or alongside relationship
-     classification and override that misclassification when a crop is
-     detected.
-   - `matching.detectCrops` config flag already exists (schema.ts) but is
-     currently unused anywhere — this is presumably the gate for M6's
-     detector.
+4. Re-read PLAN.md §17 (source-quality ranking), §18 (confidence
+   calculation), and §16 (group construction — re-check M5's
+   representative-validated-clique approach still makes sense once
+   scoring exists) before starting M7. Notes:
+   - This is the milestone where `recommendedOriginalId` finally gets set
+     and `status: "automatic"` becomes reachable — every prior milestone
+     deliberately stopped short of this. The hard disqualifiers in §17.1
+     (corrupted, detected crop with a complete candidate available,
+     probable upscale with a genuine smaller source, etc.) map directly
+     onto signals M3-M6 already recorded (`quality.probableUpscale`, crop
+     relationships, `warnings` on groups) — this milestone's job is
+     mostly *consuming* those signals into a score, not inventing new
+     detectors.
+   - **Still-unresolved limitation carried over from M6**: crop detection
+     only ever examines pairs already classified `"unknown"` by M5. A
+     crop with high retained-area can sometimes pass SSIM confirmation
+     outright and get classified `"resize"` before crop detection ever
+     sees it — crop detection currently never re-examines already
+     *confirmed* pairs to check whether they're actually a crop.
+     `classifyRelationship()` in `relationship-classifier.ts` has no
+     special handling for this either. Worth deciding in M7 whether
+     scoring should treat suspiciously-high-retained-"resize" pairs with
+     extra caution, or whether crop detection should be widened to also
+     re-examine confirmed pairs (more expensive, not done for this
+     reason).
+   - `review.automaticConfidenceThreshold` / `review.manualReviewThreshold`
+     already exist in config and are already used by M5's
+     `buildVisualGroups` for the `manual-review`/`ambiguous` split — M7
+     needs to be the one that actually reaches `"automatic"`.
 
 ### Gate that was cleared before starting M3 (PLAN.md §38) — for reference
 

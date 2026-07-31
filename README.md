@@ -24,7 +24,7 @@ Early development. Progress against [`PLAN.md` §34](./PLAN.md#34-implementation
 - [x] [Milestone 7: scoring and recommendations](https://github.com/davidsneighbour/image-dedup/issues/8)
 - [x] [Milestone 8: reports](https://github.com/davidsneighbour/image-dedup/issues/9)
 - [x] [Milestone 9: review import](https://github.com/davidsneighbour/image-dedup/issues/10)
-- [ ] [Milestone 10: consolidation](https://github.com/davidsneighbour/image-dedup/issues/11)
+- [x] [Milestone 10: consolidation](https://github.com/davidsneighbour/image-dedup/issues/11)
 - [ ] [Milestone 11: reference discovery](https://github.com/davidsneighbour/image-dedup/issues/12)
 - [ ] [Milestone 12: reference replacement and verification](https://github.com/davidsneighbour/image-dedup/issues/13)
 
@@ -70,10 +70,11 @@ config file alone can trigger a mutating operation.
 
 | Command | Status | Purpose |
 | --- | --- | --- |
-| `audit` | discovery + inventory implemented | Scan inputs, fingerprint images |
-| `report` | not implemented | Generate JSON/HTML reports |
-| `review` | not implemented | Review groups, import decisions |
-| `consolidate` | not implemented | Copy approved originals to canonical dir |
+| `audit` | implemented | Scan inputs, fingerprint images, detect duplicates/derivatives, score candidates |
+| `report` | implemented | Generate JSON/HTML reports |
+| `review import` | implemented | Import human decisions exported from the HTML report |
+| `consolidate` | implemented | Copy approved originals to the canonical originals directory |
+| `rollback` | implemented | Undo files copied by a previous `consolidate --apply` run |
 | `references` | not implemented | Find/replace source-code image references |
 | `verify` | not implemented | Verify consolidation, references, repo checks |
 
@@ -81,10 +82,14 @@ Every command supports `--help`.
 
 ## Safety model
 
-- Mutating commands (`consolidate`, `references --apply`) require an
-  explicit `--apply` flag; `--yes` only suppresses interactive
+- Mutating commands (`consolidate`, `rollback`, `references --apply`) require
+  an explicit `--apply` flag; `--yes` only suppresses interactive
   confirmation and never substitutes for `--apply`.
-- Nothing is deleted in this version of the tool, anywhere, under any flag.
+- Source files are never deleted or modified by any command, under any flag.
+  `rollback` only ever removes files `consolidate` itself created in the
+  canonical originals directory, and only after re-verifying their content
+  hash still matches what was written and that no later run still depends
+  on them.
 - No network calls, no AI/remote services, no image data leaves the
   machine.
 - The tool never writes outside the configured workspace or originals
@@ -117,3 +122,12 @@ land — see `RESTART.md`):
 - Symlinked directories are not traversed (avoids symlink-loop risk at the
   directory-walk level); symlinked files are still discovered and resolved
   individually.
+- Date-based canonical paths (`consolidation.naming: "date-slug"`/
+  `"template"`) use the trusted EXIF capture date when present, falling
+  back to filesystem modification time (flagged as weak) or
+  `unknown-date`; PLAN.md's "configured source date" tier has no
+  corresponding config field yet.
+- `rollback` doesn't rewrite `<originalsDirectory>/manifest.json` after
+  removing files — the manifest reflects the run that wrote it, not
+  necessarily the current directory contents. Re-run `consolidate --apply`
+  after a rollback to regenerate it.

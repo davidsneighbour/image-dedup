@@ -43,12 +43,109 @@ Workflow per milestone:
    `status:done` (or leave in-progress if partially done — be honest).
 6. Update this file's "Current state" section below.
 
-## Current state (last updated: 2026-08-01, continued through M9)
+## Current state (last updated: 2026-08-01, continued through M10)
 
-**M1-M9 are implemented, tested, and committed** (commits `e329acb`,
+**M1-M10 are implemented, tested, and committed** (commits `e329acb`,
 `6375433`, `b3b50a8`, `e8a1b3f`, `e3580de`, `842cf38`, `79b0751`,
-`e55901c`, `0073bdd`). Next per PLAN.md's ordering: M10 (consolidation,
-issue #11) — re-read PLAN.md §22-24 before starting it.
+`e55901c`, `0073bdd`, `23829a7`). Next per PLAN.md's ordering: M11
+(source-code reference discovery, issue #12) — re-read PLAN.md §25
+before starting it.
+
+### M10 — what was added on top of M1-M9
+
+- `src/consolidation/select-originals.ts` — `selectOriginals()`, the
+  policy layer deciding *which* images actually get copied and what
+  provenance to record (PLAN.md §22-24 read together, since the plan
+  doesn't spell this decision out as its own phase). Rules: an
+  `"automatic"`/`"approved"` group with a `recommendedOriginalId` copies
+  only that member (every other member becomes `selectedFrom`
+  provenance, never its own copy); an `"approved"` group with no
+  recommendation (reviewer picked "keep multiple") or a `"rejected"`
+  group ("not related") treats every member as independent; a
+  `"manual-review"`/`"ambiguous"` group is excluded entirely and
+  surfaced via `unresolvedGroupIds` rather than guessed at (PLAN.md
+  §35). Exact-duplicate subsumption (a member loses to a byte-identical
+  winner elsewhere) always overrides an unrelated group's "keep
+  multiple" decision for that same image, regardless of which group is
+  processed first — tested explicitly in
+  `tests/unit/select-originals.test.ts`, since `computeExactDuplicateGroups`
+  and `buildVisualGroups` (M3/M4) both run over the *same* full record
+  set independently, so the same image can legitimately be a member of
+  more than one group of different kinds.
+- `src/consolidation/plan-canonical-paths.ts` — `planCanonicalPaths()`,
+  implementing every PLAN.md §22.1 naming strategy
+  (`original-filename`, `sanitised-filename`, `content-hash`,
+  `date-slug`, `group-id`, `template`) and every §22.4 collision policy
+  (`fail`, `append-hash`, `reuse-identical`, `manual-review`). Reads the
+  filesystem (existing files under `originalsDirectory`) because
+  `reuse-identical` can only be decided by comparing actual content —
+  the only filesystem read anywhere in the planning path. Collision
+  detection is case-insensitive and Unicode-normalisation-insensitive
+  (`src/consolidation/sanitise-filename.ts`'s `collisionKey()`).
+- `src/consolidation/select-date.ts` — `selectDate()`: trusted EXIF
+  capture date, else filesystem `modifiedAt` **explicitly flagged** as a
+  weak fallback (never silently treated as a capture date, per PLAN.md
+  §22.3), else `"unknown-date"`. PLAN.md's "configured source date" tier
+  has no corresponding config field anywhere in `configSchema` and was
+  skipped rather than invented — flagged in the README's known
+  limitations.
+- `src/consolidation/copy-and-verify.ts` — `copyAndVerifyEntry()`: the
+  actual PLAN.md §23.1 sequence. Re-hashes the *source* immediately
+  before copying (never trusts the audit snapshot — the file may have
+  changed since `audit` last ran) and fails that one entry loudly rather
+  than copying a since-modified file under a stale id. Copies with
+  `COPYFILE_EXCL` (never overwrites — collision resolution already
+  happened during planning; an existing destination here means the
+  filesystem changed underneath the plan), fsyncs, hashes the
+  destination, and compares against the source hash.
+- `src/consolidation/run-consolidation.ts` — `runConsolidation()`, the
+  orchestration entry point. Collisions always abort the **entire** run
+  before any file is copied — PLAN.md's "collisions fail safely" and "no
+  mutation without --apply" both require all-or-nothing, not a partial
+  copy followed by a mid-run error. `<workspace>/manifest.preview.json`
+  is written on every run, dry-run or not (PLAN.md §23.1 step 6 happens
+  before the copy steps). `--apply` additionally: copies+verifies every
+  entry, records each `ConsolidationOperation` into the new `operations`
+  SQLite table (`src/persistence/repositories/operations.ts`, migration
+  v6) *and* a human-readable `<workspace>/journal/<runId>.json`
+  (`src/consolidation/journal-file.ts` — the DB table is authoritative
+  for rollback, the JSON file is just for inspection), and writes
+  `<originalsDirectory>/manifest.json` (excluding any entry whose copy
+  failed verification).
+- `src/consolidation/rollback-consolidation.ts` — `rollbackConsolidation()`.
+  Three independent safety checks gate every removal (PLAN.md §23.4): the
+  operation actually completed (`status === "verified"`, not
+  `"skipped-identical"`/`"failed"`/already `"rolled-back"`); the
+  destination's *current* hash still matches what this run wrote there
+  (refuses to remove content that's been touched since); and no later
+  run's operations also reference the same destination (a subsequent
+  `consolidate --apply` may have re-verified or reused that exact path —
+  removing it would pull the rug out from under that later run). Doesn't
+  parse or rewrite `<originalsDirectory>/manifest.json` — flagged as a
+  known limitation in the README (re-run `consolidate --apply` after a
+  rollback to regenerate it).
+- `image-origin rollback` is a **separate top-level CLI command**, not
+  `consolidate rollback` — nesting it would give `consolidate` (which
+  needs its own `--workspace` for its default action) a child command
+  needing the same option name, exactly the Commander.js parent/child
+  option-shadowing bug already hit and fixed once in M9 (see
+  `src/cli/commands/review.ts`'s comment). Documented in
+  `src/cli/commands/rollback.ts` so nobody "fixes" this by renesting it.
+- `src/domain/manifest.ts` (+ `schemas/manifest.schema.json`) and
+  `src/domain/operation.ts` — the canonical manifest (PLAN.md §24) and
+  operation journal entry (§23.3) types/zod schemas, following the same
+  "hand-kept in sync with a JSON Schema file" precedent as
+  `json-report.ts`/`review-decision.ts`. Operation `source`/`destination`
+  are absolute paths (not the repo-relative-looking strings in PLAN.md's
+  illustrative example) — deliberate, since rollback runs later, possibly
+  from a different working directory, and needs entries to stay
+  filesystem-actionable independent of cwd.
+- Manually verified against the built CLI end-to-end (not just unit/
+  integration tests): dry-run plan → apply (files copied, hashes
+  verified, manifest + journal written) → second apply failing safely
+  with exit code 5 on collision → `rollback` dry-run (nothing removed) →
+  `rollback --apply` (files actually removed, `manifest.json`
+  deliberately left in place and now stale, per the limitation above).
 
 ### M9 — what was added on top of M1-M8
 
